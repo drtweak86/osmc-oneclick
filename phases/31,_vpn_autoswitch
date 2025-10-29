@@ -4,66 +4,147 @@ log(){ echo -e "[oneclick][31_autoswitch] $*"; }
 
 CONF_DIR="/etc/wireguard"
 LOG="/var/log/wg-autoswitch.log"
+TEST_URL_DEFAULT="https://speed.cloudflare.com/__down?bytes=8000000"   # ~8MB
+PING_COUNT=4
+# Streaming-aware thresholds
+MIN_DL_MBPS=12           # keep current if ≥ this
+MAX_RTT_MS=80            # and avg ping ≤ this
+MAX_LOSS_PCT=2           # and packet loss ≤ this
+# Score weighting (lower is better): score = rtt_ms + loss_pct*10 - (dl_mbps*2)
+W_RTT=1
+W_LOSS=10
+W_DL=2
+
 mkdir -p "$(dirname "$LOG")"
+touch "$LOG"
 
-log "Starting VPN auto-switch check" | tee -a "$LOG"
+have(){ command -v "$1" >/dev/null 2>&1; }
+need(){ have "$1" || { log "ERROR: missing $1"; exit 1; }; }
 
-best_conf=""
-best_ping_ms=999999
+need wg; need wg-quick; need curl; need ping
+
+# Pick a test URL (allow override via env var)
+TEST_URL="${WG_TEST_URL:-$TEST_URL_DEFAULT}"
+
+parse_ping(){
+  # prints "avg_ms loss_pct"
+  local host="$1" stats avg loss
+  stats="$(ping -n -q -c "$PING_COUNT" "$host" 2>/dev/null || true)"
+  avg="$(awk -F'/' '/^rtt|^round-trip/ {print $5}' <<<"$stats")"
+  loss="$(awk -F',' '/packets transmitted/ {gsub(/ /,""); print $3}' <<<"$stats" | sed 's/%.*//')"
+  [[ "$avg" =~ ^[0-9.]+$ ]] || avg=9999
+  [[ "$loss" =~ ^[0-9]+$  ]] || loss=100
+  printf "%s %s\n" "$avg" "$loss"
+}
+
+throughput_mbps(){
+  # curl reports bytes/sec via %{speed_download}; convert to Mbps (bits/1e6)
+  local iface="$1" secs="${2:-4}" url="$3" out bps mbps
+  # Limit test duration with --max-time; discard data to /dev/null
+  # If interface is given, prefer using that default route (wg-quick sets it).
+  out="$(curl -m "$secs" --silent --show-error --output /dev/null \
+         --write-out "%{speed_download}" "$url" 2>/dev/null || echo 0)"
+  # speed_download is bytes/sec; convert to Mbps
+  bps="$(printf "%.0f" "$out")"
+  mbps="$(awk -v b="$bps" 'BEGIN{printf "%.1f", (b*8)/1000000.0}')"
+  echo "$mbps"
+}
+
+endpoint_host_for(){
+  local conf="$1" line host
+  line="$(grep -E '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" || true)"
+  [[ -n "$line" ]] || { echo ""; return; }
+  host="${line#*=}"; host="${host%%:*}"; echo "$(echo "$host" | xargs)"
+}
+
+score_line(){
+  # args: rtt_ms loss_pct dl_mbps
+  local rtt="$1" loss="$2" dl="$3"
+  awk -v r="$rtt" -v l="$loss" -v d="$dl" -v wr="$W_RTT" -v wl="$W_LOSS" -v wd="$W_DL" \
+      'BEGIN{printf "%.0f", (r*wr) + (l*wl) - (d*wd)}'
+}
+
+log "Starting VPN auto-switch check (streaming-aware: rtt≤${MAX_RTT_MS}ms, loss≤${MAX_LOSS_PCT}%, dl≥${MIN_DL_MBPS}Mbps)" | tee -a "$LOG"
+
+# 0) If a tunnel is already up, test it first and keep it if it meets thresholds
+current_ifaces="$(wg show interfaces 2>/dev/null || true)"
+
+if [[ -n "$current_ifaces" ]]; then
+  # If multiple are up, just pick the first
+  current="${current_ifaces%% *}"
+  log "Current tunnel: $current" | tee -a "$LOG"
+
+  # Quick throughput test (~4s)
+  cur_dl="$(throughput_mbps "$current" 4 "$TEST_URL")"
+  # Ping host from its conf (helps detect poor path)
+  conf="/etc/wireguard/${current}.conf"
+  host="$(endpoint_host_for "$conf")"
+  read -r cur_rtt cur_loss < <(parse_ping "$host")
+  cur_score="$(score_line "$cur_rtt" "$cur_loss" "$cur_dl")"
+
+  log "  current metrics: avg=${cur_rtt}ms loss=${cur_loss}% dl=${cur_dl}Mbps score=${cur_score}" | tee -a "$LOG"
+
+  if (( ${cur_rtt%.*} <= MAX_RTT_MS )) && (( cur_loss <= MAX_LOSS_PCT )) && \
+     awk -v d="$cur_dl" -v min="$MIN_DL_MBPS" 'BEGIN{exit !(d>=min)}'; then
+    log "Keeping current tunnel ($current): thresholds satisfied." | tee -a "$LOG"
+    exit 0
+  else
+    log "Current tunnel underperforming; evaluating alternatives…" | tee -a "$LOG"
+  fi
+fi
+
+# 1) Evaluate all configs, compute score; for throughput we will bring each up briefly
+best_name=""
+best_score=999999
+best_line=""
 
 shopt -s nullglob
 for conf in "$CONF_DIR"/*.conf; do
   name="$(basename "${conf%.conf}")"
+  host="$(endpoint_host_for "$conf")"
+  [[ -n "$host" ]] || { log "  $name: no Endpoint=; skipping" | tee -a "$LOG"; continue; }
 
-  # Extract Endpoint host safely
-  endpoint_line="$(grep -E '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" || true)"
-  [ -n "$endpoint_line" ] || { log "Skipping $name (no Endpoint= in conf)"; continue; }
+  # Ping without bringing tunnel up
+  read -r rtt loss < <(parse_ping "$host")
+  log "  $name ping: avg=${rtt}ms loss=${loss}%" | tee -a "$LOG"
 
-  endpoint="${endpoint_line#*=}"
-  endpoint="$(echo "$endpoint" | xargs)"               # trim
-  host="${endpoint%%:*}"                               # host part before :
-  [ -n "$host" ] || { log "Skipping $name (empty host)"; continue; }
+  # Bring it up, run short download, then bring it down (do this serially)
+  # First, tear down any wg links to avoid route pollution during tests
+  for ifc in $(wg show interfaces 2>/dev/null); do wg-quick down "$ifc" >/dev/null 2>&1 || true; done
 
-  # Ensure the host resolves
-  if ! getent ahostsv4 "$host" >/dev/null 2>&1; then
-    log "Skipping $name ($host does not resolve)"
+  log "  $name throughput test: up…" | tee -a "$LOG"
+  if ! wg-quick up "$name" >/dev/null 2>&1; then
+    log "  $name failed to come up; skipping" | tee -a "$LOG"
     continue
   fi
 
-  # 3 ICMP pings, parse avg RTT
-  rtt="$(ping -c3 -q "$host" 2>/dev/null | awk -F'/' '/^rtt|^round-trip/ {print $5}')"
-  if [[ -z "$rtt" ]]; then
-    log "Skipping $name (ping failed)"
-    continue
-  fi
+  dl="$(throughput_mbps "$name" 4 "$TEST_URL")"
+  wg-quick down "$name" >/dev/null 2>&1 || true
+  log "  $name throughput: dl=${dl}Mbps" | tee -a "$LOG"
 
-  # rtt may be decimal; compare numerically by scaling
-  rtt_scaled="$(awk -v v="$rtt" 'BEGIN{printf("%d", v*1000)}')"
-  log "Measured $name ($host): avg ${rtt} ms" | tee -a "$LOG"
+  s="$(score_line "$rtt" "$loss" "$dl")"
+  log "  $name score=${s}" | tee -a "$LOG"
 
-  if (( rtt_scaled < best_ping_ms )); then
-    best_ping_ms="$rtt_scaled"
-    best_conf="$name"
+  if (( s < best_score )); then
+    best_score=$s
+    best_name="$name"
+    best_line="avg=${rtt}ms loss=${loss}% dl=${dl}Mbps score=${s}"
   fi
 done
+shopt -u nullglob
 
-if [[ -z "${best_conf}" ]]; then
-  log "No valid VPN endpoints found; leaving current state as-is" | tee -a "$LOG"
+if [[ -z "$best_name" ]]; then
+  log "No viable VPN candidates; aborting." | tee -a "$LOG"
   exit 1
 fi
 
-best_human="$(awk -v v="$best_ping_ms" 'BEGIN{printf("%.2f", v/1000)}')"
-log "Fastest endpoint: ${best_conf} (${best_human} ms)" | tee -a "$LOG"
+# 2) Bring down any existing and connect to the best
+for ifc in $(wg show interfaces 2>/dev/null); do wg-quick down "$ifc" || true; done
+log "Connecting to best: $best_name  ($best_line)" | tee -a "$LOG"
+wg-quick up "$best_name"
+wg show "$best_name" 2>/dev/null | sed 's/^/    /' | tee -a "$LOG"
 
-# Bring any existing tunnels down
-for ifc in $(wg show interfaces 2>/dev/null || true); do
-  wg-quick down "$ifc" || true
-done
-
-# Connect to the best one
-if wg-quick up "$best_conf"; then
-  log "Connected to $best_conf" | tee -a "$LOG"
-else
-  log "Failed to bring up $best_conf" | tee -a "$LOG"
-  exit 1
+# Optional: show on-screen Kodi notification if available
+if command -v kodi-send >/dev/null 2>&1; then
+  kodi-send --action="Notification(VPN,Connected to $best_name: $best_line,60000)"
 fi

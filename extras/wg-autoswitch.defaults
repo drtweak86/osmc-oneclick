@@ -1,0 +1,27 @@
+# Copy this to /etc/default/wg-autoswitch and tweak if you like
+
+# File where logs are saved
+LOG_FILE=/var/log/wg-autoswitch.log
+
+# Minimum acceptable download (Mbit/s) for streaming
+MIN_DL_MBIT=12
+
+# Maximum acceptable RTT (ms)
+MAX_RTT_MS=80
+
+# Require this many consecutive "bad" checks before switching
+HYSTERESIS_RUNS=2
+
+# Download size (bytes) and URL for throughput tests
+TEST_BYTES=12000000
+TEST_URL="https://speed.cloudflare.com/__down?bytes=${TEST_BYTES}"
+
+# Curl timeout per throughput test (seconds)
+DL_TIMEOUT=20
+
+# Attempts & timeout for TCP connect RTT
+CONNECT_ATTEMPTS=2
+PING_TIMEOUT=1000
+
+# 1 to emit a Notification() line in logs for UI hooks
+SHOW_NOTIFY=1

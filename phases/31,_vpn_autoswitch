@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- BEGIN: logging helpers (drop-in cosmetic fix) ---
+# shellcheck disable=SC2154  # rtt_ms defined later in probes
+fmt_rtt() { [ -n "${rtt_ms:-}" ] && echo "rtt=${rtt_ms}ms" || echo "rtt=na"; }
+fmt_flag() {
+  local key="FLAG_${1//-/_}"
+  # shellcheck disable=SC2086
+  eval "echo \${$key:-}"
+}
+log() {
+  # Usage: log "profile" "message"
+  local prof="$1"; shift
+  local flag="$(fmt_flag "$prof")"
+  printf '%s %s[%s] %s\n' "$(date +'%F %T')" "[oneclick][31_autoswitch]" "${prof}" "${flag:+$flag }$*"
+}
+# Back-compat shim for old lines printed with the sentinel
+sentinel_fix() {
+  sed -u "s/avg=9999ms/$(fmt_rtt)/g; s/loss=0% dl=/dl=/g"
+}
+# --- END: logging helpers ---
+
 # WireGuard autoswitch (streaming-aware) 🦈
 # - Scores tunnels using RTT + download throughput
 # - Hysteresis so it doesn't flap

@@ -1,27 +1,17 @@
-# Copy this to /etc/default/wg-autoswitch and tweak if you like
-
-# File where logs are saved
-LOG_FILE=/var/log/wg-autoswitch.log
-
-# Minimum acceptable download (Mbit/s) for streaming
+# /etc/default/wg-autoswitch style defaults (also used by the script if present in repo)
+# Tuning
 MIN_DL_MBIT=12
-
-# Maximum acceptable RTT (ms)
 MAX_RTT_MS=80
+MAX_LOSS_PCT=2
+TEST_BYTES=$((4*1024*1024))   # ~4 MB per probe
 
-# Require this many consecutive "bad" checks before switching
-HYSTERESIS_RUNS=2
-
-# Download size (bytes) and URL for throughput tests
-TEST_BYTES=12000000
-TEST_URL="https://speed.cloudflare.com/__down?bytes=${TEST_BYTES}"
-
-# Curl timeout per throughput test (seconds)
-DL_TIMEOUT=20
-
-# Attempts & timeout for TCP connect RTT
-CONNECT_ATTEMPTS=2
-PING_TIMEOUT=1000
-
-# 1 to emit a Notification() line in logs for UI hooks
+# Logging & notifications
+LOG_FILE=/var/log/wg-autoswitch.log
 SHOW_NOTIFY=1
+NOTIFY_ICON="🦈"
+# Map of flag icons (best-effort)
+FLAG_de-ber="🇩🇪"
+FLAG_nl-ams="🇳🇱"
+FLAG_uk-lon="🇬🇧"
+FLAG_uk-man="🇬🇧"
+FLAG_us-nyc="🇺🇸"

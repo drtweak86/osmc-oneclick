@@ -1,14 +1,14 @@
 [Unit]
 Description=WireGuard auto-switch based on streaming metrics
-After=network-online.target
 Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=/opt/osmc-oneclick/phases/31_vpn_autoswitch.sh
-Nice=5
-IOSchedulingClass=best-effort
-IOSchedulingPriority=5
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

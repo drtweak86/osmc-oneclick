@@ -1,21 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# WireGuard skeleton; drops a systemd unit that auto-starts when config exists
-apt-get install -y --no-install-recommends wireguard-tools
+log(){ echo -e "[oneclick][30_vpn] $*"; }
 
-mkdir -p /etc/wireguard
-chmod 700 /etc/wireguard
-
-# If a wg config is already present (you can upload later), enable it
-if ls /etc/wireguard/*.conf >/dev/null 2>&1; then
-  systemctl enable --now wg-quick@$(basename /etc/wireguard/*.conf .conf)
+log "Installing WireGuard + DNS helper"
+apt-get update
+# Prefer resolvconf; fall back to openresolv if not available
+if ! apt-get install -y --no-install-recommends wireguard resolvconf ; then
+  apt-get install -y --no-install-recommends wireguard openresolv
 fi
 
-# Placeholder for “auto-switch based on throughput/latency” (future module)
-install -d /opt/osmc-oneclick/vpn
-cat >/opt/osmc-oneclick/vpn/README.md <<'EOT'
-Drop your WireGuard config at /etc/wireguard/<name>.conf then:
-  sudo systemctl enable --now wg-quick@<name>
-Auto-switcher will be added here later.
-EOT
+# Clone the PRIVATE VPN configs as 'osmc' (uses osmc's ~/.ssh keys)
+REPO_VPN="git@github.com:drtweak86/osmc-vpn-configs.git"
+DEST_VPN="/opt/osmc-vpn-configs"
+
+mkdir -p "$(dirname "$DEST_VPN")"
+chown osmc:osmc "$(dirname "$DEST_VPN")"
+
+if [ -d "$DEST_VPN/.git" ]; then
+  log "Updating VPN repo in $DEST_VPN"
+  sudo -u osmc -H git -C "$DEST_VPN" fetch --depth=1 origin main
+  sudo -u osmc -H git -C "$DEST_VPN" reset --hard origin/main
+else
+  log "Cloning VPN repo into $DEST_VPN"
+  sudo -u osmc -H git clone --depth=1 "$REPO_VPN" "$DEST_VPN"
+fi
+
+# Install configs
+log "Placing configs into /etc/wireguard"
+mkdir -p /etc/wireguard
+# Copy only *.conf if present
+shopt -s nullglob
+confs=("$DEST_VPN"/*.conf)
+if [ ${#confs[@]} -eq 0 ]; then
+  log "WARNING: No .conf files found in $DEST_VPN"
+else
+  cp -v "${confs[@]}" /etc/wireguard/
+  chmod 600 /etc/wireguard/*.conf
+  chown root:root /etc/wireguard/*.conf
+  log "Installed configs:"
+  ls -1 /etc/wireguard/*.conf || true
+fi
+
+# Tiny wg-quick tweak: some setups prefer resolvconf tag 'tun.NAME'
+if command -v resolvconf >/dev/null 2>&1; then
+  log "resolvconf present; wg-quick will register DNS for tunnels"
+fi
+
+log "VPN phase complete."

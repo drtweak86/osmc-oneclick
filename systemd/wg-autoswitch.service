@@ -1,0 +1,12 @@
+[Unit]
+Description=WireGuard auto-switch to best endpoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/osmc-oneclick/phases/31_vpn_autoswitch.sh
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

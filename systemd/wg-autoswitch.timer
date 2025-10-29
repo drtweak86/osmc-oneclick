@@ -1,0 +1,10 @@
+[Unit]
+Description=Run WireGuard auto-switch periodically
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=15min
+Unit=wg-autoswitch.service
+
+[Install]
+WantedBy=timers.target

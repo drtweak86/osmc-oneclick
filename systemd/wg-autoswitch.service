@@ -1,14 +1,23 @@
 [Unit]
 Description=WireGuard auto-switch based on streaming metrics
-Wants=network-online.target
+Wants=wg-autoswitch.timer
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
+User=root
+Group=root
+EnvironmentFile=-/etc/default/wg-autoswitch
 ExecStart=/opt/osmc-oneclick/phases/31_vpn_autoswitch.sh
-ProtectSystem=full
-ProtectHome=true
-NoNewPrivileges=true
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUSchedulingPolicy=other
+# Ensure log directory exists
+ExecStartPre=/bin/mkdir -p /var/log
+# Hard caps so a stuck probe doesn’t hang forever
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

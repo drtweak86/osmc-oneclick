@@ -1,11 +1,11 @@
 [Unit]
-Description=Run WireGuard auto-switch periodically
+Description=Run WireGuard VPN autoswitcher periodically
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=10min
+RandomizedDelaySec=45s
 AccuracySec=30s
-Unit=wg-autoswitch.service
 Persistent=true
 
 [Install]

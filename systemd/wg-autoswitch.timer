@@ -2,9 +2,10 @@
 Description=Run WireGuard auto-switch periodically
 
 [Timer]
-OnBootSec=45s
+OnBootSec=45
 OnUnitActiveSec=15min
-Unit=wg-autoswitch.service
+AccuracySec=30s
+Persistent=true
 
 [Install]
 WantedBy=timers.target

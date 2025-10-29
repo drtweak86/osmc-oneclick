@@ -2,19 +2,21 @@
 set -euo pipefail
 log(){ echo -e "[oneclick][32_enable_autoswitch] $*"; }
 
-# Where the repo is checked out
-ROOT="/opt/osmc-oneclick"
+SVC=/etc/systemd/system/wg-autoswitch.service
+TMR=/etc/systemd/system/wg-autoswitch.timer
+SRC_DIR="/opt/osmc-oneclick/systemd"
 
-# Install/overwrite the service & timer
-install -m 0644 "$ROOT/systemd/wg-autoswitch.service" /etc/systemd/system/wg-autoswitch.service
-install -m 0644 "$ROOT/systemd/wg-autoswitch.timer"   /etc/systemd/system/wg-autoswitch.timer
+install_unit(){
+  local src="$1" dst="$2"
+  if [ -f "$src" ]; then
+    cp -f "$src" "$dst"
+  fi
+}
 
-# Make sure the autoswitch script is executable
-chmod +x "$ROOT/phases/31_vpn_autoswitch.sh" || true
-
-# Reload systemd, enable & start the timer
+install_unit "$SRC_DIR/wg-autoswitch.service" "$SVC"
+install_unit "$SRC_DIR/wg-autoswitch.timer"   "$TMR"
 systemctl daemon-reload
 systemctl enable --now wg-autoswitch.timer
 
-# Show status for quick sanity
 systemctl status wg-autoswitch.timer --no-pager || true
+log "Autoswitch timer enabled."

@@ -1,78 +1,254 @@
 #!/usr/bin/env bash
 set -euo pipefail
-log(){ echo "[oneclick][31_autoswitch] $*" | tee -a "$LOG"; }
 
-CONF_DIR="/etc/wireguard"
-LOG="/var/log/wg-autoswitch.log"
-TEST_URL="https://speed.cloudflare.com/__down?bytes=2000000"  # ~2MB quick probe
-MAX_SECS=6    # hard cap for each probe
-COOLDOWN=1    # small pause between hops
+# WireGuard autoswitch (streaming-aware) 🦈
+# - Scores tunnels using RTT + download throughput
+# - Hysteresis so it doesn't flap
+# - Emoji flags in logs/notifications
+# - Optional overrides via /etc/default/wg-autoswitch
 
-mkdir -p "$(dirname "$LOG")"
-: > "$LOG"
+# ========= Optional tunables (override in /etc/default/wg-autoswitch) =========
+[ -f /etc/default/wg-autoswitch ] && . /etc/default/wg-autoswitch || true
+: "${LOG_FILE:=/var/log/wg-autoswitch.log}"
+: "${WG_DIR:=/etc/wireguard}"
+: "${TEST_BYTES:=12000000}"        # ~12 MB download per candidate
+: "${TEST_URL:=https://speed.cloudflare.com/__down?bytes=${TEST_BYTES}}"
+: "${MAX_RTT_MS:=80}"              # ms threshold for "good"
+: "${MIN_DL_MBIT:=12}"             # Mb/s threshold for "good"
+: "${HYSTERESIS_RUNS:=2}"          # require N consecutive "better" readings to switch
+: "${PING_TIMEOUT:=1000}"          # ms per TCP connect attempt
+: "${CONNECT_ATTEMPTS:=2}"         # attempts per candidate for RTT
+: "${DL_TIMEOUT:=20}"              # seconds max for each throughput trial
+: "${SHOW_NOTIFY:=1}"              # 1=emit 'Sending: {...}' line for a UI notifier hook
 
-log "Starting VPN auto-switch check (streaming-aware: TCP RTT + TTFB + DL rate)"
+# Candidate .conf files (adjust pattern if you add more)
+CANDIDATES=(
+  de-ber.conf
+  nl-ams.conf
+  uk-lon.conf
+  uk-man.conf
+  us-nyc.conf
+)
 
-best_conf=""
-best_score=999999
+# ========================== Helpers ==========================
+stamp() { date "+%F %T"; }
+log()   { printf "[oneclick][31_autoswitch] %s %s\n" "$(stamp)" "$*" | tee -a "$LOG_FILE" >/dev/null; }
+emoji_for() {
+  case "$1" in
+    de-ber) printf "🇩🇪";;
+    nl-ams) printf "🇳🇱";;
+    uk-lon|uk-man) printf "🇬🇧";;
+    us-nyc) printf "🇺🇸";;
+    *) printf "🏳️";;
+  esac
+}
+shark() { printf "🦈"; }
 
-# bring ALL existing tunnels down first (clean slate)
-for ifc in $(wg show interfaces 2>/dev/null || true); do
-  wg-quick down "$ifc" || true
-done
-
-for conf in "$CONF_DIR"/*.conf; do
-  [ -e "$conf" ] || continue
-  name=$(basename "${conf%.conf}")
-  log "Testing $name …"
-  # bring the tunnel up
-  if ! wg-quick up "$name" >>"$LOG" 2>&1; then
-    log "  ! failed to bring up $name"
-    continue
+ensure_log() {
+  if [ ! -e "$LOG_FILE" ]; then
+    touch "$LOG_FILE" || true
+    chmod 644 "$LOG_FILE" || true
   fi
+}
 
-  # Give routing/DNS a split second to settle
-  sleep 0.5
+# Parse Endpoint host:port from a WG config
+endpoint_of_conf() {
+  awk -F'= *' '/^\s*Endpoint\s*=/ {print $2; exit}' "$1" | tr -d '\r'
+}
 
-  # Measure TCP connect, TTFB and throughput through the tunnel
-  read -r t_conn t_ttfb spd_dl <<<"$(curl -m "$MAX_SECS" -s -o /dev/null \
-    -w '%{time_connect} %{time_starttransfer} %{speed_download}' "$TEST_URL" || echo "9e9 9e9 0")"
+# Resolve hostname to IPv4 (best effort)
+resolve_host() {
+  local host="$1"
+  getent ahostsv4 "$host" | awk '{print $1; exit}'
+}
 
-  # Convert to ms and Mbps
-  rtt_ms=$(awk -v t="$t_conn" 'BEGIN{printf("%.0f", t*1000)}')
-  ttfb_ms=$(awk -v t="$t_ttfb" 'BEGIN{printf("%.0f", t*1000)}')
-  mbps=$(awk -v bps="$spd_dl" 'BEGIN{printf("%.1f", bps/1000000)}')
+# Measure RTT using TCP connect timing
+tcp_rtt_ms() {
+  # args: ip port
+  local ip="$1" port="$2" a i=0 best=999999 start end rtt
+  for a in $(seq 1 "$CONNECT_ATTEMPTS"); do
+    start=$(($(date +%s%3N)))
+    if timeout "0.$PING_TIMEOUT" bash -c "exec 3<>/dev/tcp/${ip}/${port}" 2>/dev/null; then
+      end=$(($(date +%s%3N)))
+      exec 3<&- 3>&- || true
+      rtt=$((end-start))
+      [ "$rtt" -lt "${best:-999999}" ] && best="$rtt"
+    fi
+  done
+  printf "%s" "${best:-999999}"
+}
 
-  # Score: lower is better
-  rtt_cap=$(( rtt_ms > 500 ? 500 : rtt_ms ))
-  ttfb_cap=$(( ttfb_ms > 1000 ? 1000 : ttfb_ms ))
-  dl_penalty=$(awk -v m="$mbps" 'BEGIN{cap=(m>100?100:m); printf("%.0f", (100-cap)*5) }')
-
-  score=$(( rtt_cap*40/100 + ttfb_cap*30/100 + dl_penalty*30/100 ))
-
-  log "  metrics: rtt=${rtt_ms}ms ttfb=${ttfb_ms}ms dl=${mbps}Mbps  -> score=${score}"
-
-  # tear down before next test
-  wg-quick down "$name" >>"$LOG" 2>&1 || true
-  sleep "$COOLDOWN"
-
-  if (( score < best_score )); then
-    best_score=$score
-    best_conf=$name
+# Measure download throughput in Mbit/s via curl
+throughput_mbit() {
+  # args: iface url
+  local iface="$1" url="$2" bytes="${TEST_BYTES}" t0 t1 ms mbit
+  # Use interface routing table 51820 trick if already up; else plain curl
+  # Prefer binding via --interface when possible
+  t0=$(date +%s%3N)
+  if ! m_out=$(curl -sS --fail --max-time "$DL_TIMEOUT" --interface "$iface" "$url" -o /dev/null -w "%{size_download} %{time_total}" 2>/dev/null); then
+    # fallback: no interface bind
+    m_out=$(curl -sS --fail --max-time "$DL_TIMEOUT" "$url" -o /dev/null -w "%{size_download} %{time_total}" 2>/dev/null) || true
   fi
-done
+  t1=$(date +%s%3N)
+  if [ -n "${m_out:-}" ]; then
+    # size_download time_total
+    bytes=$(printf "%s" "$m_out" | awk '{print $1}')
+    # prefer curl's time_total, else wall clock
+    ms=$(printf "%s" "$m_out" | awk '{print int($2*1000)}')
+    [ "$ms" -le 0 ] && ms=$((t1-t0))
+    [ "$ms" -le 0 ] && echo "0" && return
+    # bits/ms -> Mbit/s
+    mbit=$(awk -v b="$bytes" -v ms="$ms" 'BEGIN{printf "%.1f", (b*8.0)/(ms)/1000.0}')
+    printf "%s" "$mbit"
+  else
+    printf "0"
+  fi
+}
 
-if [ -z "$best_conf" ]; then
-  log "No valid VPN configs tested successfully."
-  exit 1
+current_iface() {
+  # If a WG interface is up, print its name
+  wg show | awk '/^interface:/ {print $2; exit}'
+}
+
+iface_from_conf() {
+  # WG interface name is filename without .conf
+  basename "$1" .conf
+}
+
+bring_up() {
+  local conf="$1" ifn; ifn=$(iface_from_conf "$conf")
+  # If another is up, bring it down first
+  local cur; cur=$(current_iface || true)
+  if [ -n "${cur:-}" ] && [ "$cur" != "$ifn" ]; then
+    wg-quick down "$cur" >/dev/null 2>&1 || true
+  fi
+  wg-quick up "$ifn" >/dev/null
+}
+
+# ========================== Scoring ==========================
+score_of() {
+  # Lower is better (penalise high RTT; reward high DL). We also gate by thresholds.
+  # args: rtt_ms dl_mbit
+  local rtt="$1" dl="$2" s
+  # Hard gate: if below minimum throughput, big penalty
+  local pen_dl=0
+  awk -v dl="$dl" -v min="$MIN_DL_MBIT" 'BEGIN{ if (dl < min) print 1; else print 0 }' | read -r pen_dl
+  # Hard gate: if RTT too high, penalty
+  local pen_rtt=0
+  [ "$rtt" -gt "$MAX_RTT_MS" ] && pen_rtt=1
+
+  # Base score: weight RTT more for streaming snappiness
+  # s = 5*rtt - 2*dl  (lower better)
+  s=$(awk -v r="$rtt" -v d="$dl" 'BEGIN{printf "%.0f", 5*r - 2*d}')
+  # Add penalties
+  s=$(( s + pen_dl*500 + pen_rtt*300 ))
+  printf "%s" "$s"
+}
+
+# ====================== Main flow ============================
+ensure_log
+log "$(shark) Starting VPN auto-switch check (streaming-aware: rtt≤${MAX_RTT_MS}ms, dl≥${MIN_DL_MBIT}Mbps)"
+
+# Build candidate list present on disk
+present=()
+for c in "${CANDIDATES[@]}"; do
+  [ -f "${WG_DIR}/${c}" ] && present+=("$c")
+done
+if [ "${#present[@]}" -eq 0 ]; then
+  log "No WireGuard configs found in ${WG_DIR}; abort."
+  exit 0
 fi
 
-log "Best endpoint: ${best_conf} (score=${best_score})"
-wg-quick up "$best_conf" >>"$LOG" 2>&1 || true
+# Evaluate each candidate
+declare -A RTT DL SCORE EP_HOST EP_IP EP_PORT IFACE
+for conf in "${present[@]}"; do
+  ifn=$(iface_from_conf "$conf")
+  IFACE["$conf"]="$ifn"
+  ep=$(endpoint_of_conf "${WG_DIR}/${conf}")
+  EP_HOST["$conf"]="${ep%:*}"
+  EP_PORT["$conf"]="${ep##*:}"
+  ip=$(resolve_host "${EP_HOST[$conf]}") || true
+  [ -z "${ip:-}" ] && ip="1.1.1.1" # fallback harmless IP so rtt becomes "bad"
+  EP_IP["$conf"]="$ip"
 
-ip4=$(ip -4 -o addr show dev "$best_conf" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
-[ -z "${ip4:-}" ] && ip4="(no ip yet)"
+  rtt=$(tcp_rtt_ms "$ip" "${EP_PORT[$conf]}")
+  dl=$(throughput_mbit "${ifn}" "${TEST_URL}")
+  RTT["$conf"]="$rtt"
+  DL["$conf"]="$dl"
+  sc=$(score_of "$rtt" "$dl")
+  SCORE["$conf"]="$sc"
 
-kodi-send --action="Notification(VPN,Connected: ${best_conf} • IP: ${ip4} • score=${best_score},60000)" >/dev/null 2>&1 || true
+  log "  $(basename "$conf" .conf) $(emoji_for "$(basename "$conf" .conf)")  rtt=${rtt}ms dl=${dl}Mbps score=${sc}"
+done
 
-wg show >>"$LOG" 2>&1 || true
+# Pick best (lowest score)
+best_conf=""; best_score=999999
+for conf in "${present[@]}"; do
+  s="${SCORE[$conf]}"
+  if [ "$s" -lt "$best_score" ]; then
+    best_score="$s"
+    best_conf="$conf"
+  fi
+done
+
+cur_if=$(current_iface || true)
+cur_conf=""
+if [ -n "${cur_if:-}" ]; then
+  for conf in "${present[@]}"; do
+    [ "${IFACE[$conf]}" = "$cur_if" ] && cur_conf="$conf" && break
+  done
+fi
+
+# Hysteresis: if current is already "good" and not much worse, stay
+if [ -n "${cur_conf:-}" ]; then
+  cur_s="${SCORE[$cur_conf]}"
+  cur_r="${RTT[$cur_conf]}"; cur_d="${DL[$cur_conf]}"
+  log "Current tunnel: $(basename "$cur_conf" .conf) $(emoji_for "$(basename "$cur_conf" .conf)")"
+  log "  current metrics: rtt=${cur_r}ms dl=${cur_d}Mbps score=${cur_s}"
+
+  # Require best to beat current by >= 50 points or current failing thresholds
+  need_switch=0
+  if [ $((cur_s - best_score)) -lt 50 ]; then
+    # not significantly better
+    need_switch=0
+  fi
+  # force switch if current below thresholds
+  awk -v d="$cur_d" -v dlmin="$MIN_DL_MBIT" -v r="$cur_r" -v rmax="$MAX_RTT_MS" \
+    'BEGIN{ if (d<dlmin || r>rmax) exit 1; else exit 0 }'
+  if [ $? -ne 0 ]; then
+    need_switch=1
+    log "Current tunnel underperforming; evaluating alternatives…"
+  fi
+
+  # Minimal in-script debounce: only switch if we’ve seen failures HYSTERESIS_RUNS times.
+  # For simplicity, we keep a tiny state file with a counter.
+  state="/run/wg-autoswitch.state"
+  cnt=0
+  [ -f "$state" ] && cnt=$(awk -F= '/^failcnt=/{print $2}' "$state" 2>/dev/null || echo 0)
+  if [ "$need_switch" -eq 1 ]; then
+    cnt=$((cnt+1))
+  else
+    cnt=0
+  fi
+  printf "failcnt=%s\n" "$cnt" > "$state" || true
+
+  if [ "$need_switch" -eq 0 ] || [ "$cnt" -lt "$HYSTERESIS_RUNS" ]; then
+    log "Keeping current tunnel (hysteresis) — failcnt=${cnt}/${HYSTERESIS_RUNS}"
+    exit 0
+  fi
+fi
+
+# Switch to best
+best_if="${IFACE[$best_conf]}"
+best_r="${RTT[$best_conf]}"; best_d="${DL[$best_conf]}"
+log "Connecting to best: $(basename "$best_conf" .conf) $(emoji_for "$(basename "$best_conf" .conf)")  (rtt=${best_r}ms dl=${best_d}Mbps score=${best_score})"
+bring_up "${WG_DIR}/${best_conf}"
+
+# Show a summary (wg show)
+wg show | sed 's/^/    /' | tee -a "$LOG_FILE" >/dev/null || true
+
+# Optional notifier hook line (leave as-is; external tool can watch for this)
+if [ "$SHOW_NOTIFY" = "1" ]; then
+  msg="VPN $(emoji_for "$(basename "$best_conf" .conf)")  $(basename "$best_conf" .conf)  rtt=${best_r}ms  dl=${best_d}Mbps"
+  echo "Sending: {'type': 'action', 'content': 'Notification(${msg},60000)'}"
+fi

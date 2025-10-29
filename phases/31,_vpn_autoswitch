@@ -1,142 +1,69 @@
 #!/usr/bin/env bash
-# phases/31_vpn_autoswitch.sh
 set -euo pipefail
-
-log(){ echo "[$(date +'%F %T')] [oneclick][31_autoswitch] $*"; }
-
-# --- Defaults (can be overridden in /etc/default/wg-autoswitch) ---
-PING_TARGET=${PING_TARGET:-1.1.1.1}
-SPEED_URL=${SPEED_URL:-https://speed.cloudflare.com/__down?bytes=2000000} # ~2MB
-PING_COUNT=${PING_COUNT:-3}
-MAX_LATENCY_MS=${MAX_LATENCY_MS:-120}
-MIN_SPEED_Mbps=${MIN_SPEED_Mbps:-15}
-MARGIN_SCORE=${MARGIN_SCORE:-10}
-
-CONF_FILE="/etc/default/wg-autoswitch"
-[ -f "$CONF_FILE" ] && . "$CONF_FILE" || true
+log(){ echo -e "[oneclick][31_autoswitch] $*"; }
 
 CONF_DIR="/etc/wireguard"
-LOG_FILE="/var/log/wg-autoswitch.log"
-mkdir -p "$(dirname "$LOG_FILE")"
-touch "$LOG_FILE" || true
+LOG="/var/log/wg-autoswitch.log"
+mkdir -p "$(dirname "$LOG")"
 
-log "Starting streaming-aware VPN auto-switch" | tee -a "$LOG_FILE"
+log "Starting VPN auto-switch check" | tee -a "$LOG"
 
-# Ensure DNS helper exists for wg-quick
-if ! command -v resolvconf >/dev/null 2>&1; then
-  log "resolvconf not found; installing (or openresolv fallback)..." | tee -a "$LOG_FILE"
-  apt-get update -qq || true
-  apt-get install -y --no-install-recommends resolvconf >/dev/null 2>&1 || \
-  apt-get install -y --no-install-recommends openresolv >/dev/null 2>&1 || true
-fi
+best_conf=""
+best_ping_ms=999999
 
 shopt -s nullglob
-profiles=( "$CONF_DIR"/*.conf )
-shopt -u nullglob
+for conf in "$CONF_DIR"/*.conf; do
+  name="$(basename "${conf%.conf}")"
 
-if [ ${#profiles[@]} -eq 0 ]; then
-  log "No WireGuard profiles in $CONF_DIR — aborting." | tee -a "$LOG_FILE"
-  exit 0
+  # Extract Endpoint host safely
+  endpoint_line="$(grep -E '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" || true)"
+  [ -n "$endpoint_line" ] || { log "Skipping $name (no Endpoint= in conf)"; continue; }
+
+  endpoint="${endpoint_line#*=}"
+  endpoint="$(echo "$endpoint" | xargs)"               # trim
+  host="${endpoint%%:*}"                               # host part before :
+  [ -n "$host" ] || { log "Skipping $name (empty host)"; continue; }
+
+  # Ensure the host resolves
+  if ! getent ahostsv4 "$host" >/dev/null 2>&1; then
+    log "Skipping $name ($host does not resolve)"
+    continue
+  fi
+
+  # 3 ICMP pings, parse avg RTT
+  rtt="$(ping -c3 -q "$host" 2>/dev/null | awk -F'/' '/^rtt|^round-trip/ {print $5}')"
+  if [[ -z "$rtt" ]]; then
+    log "Skipping $name (ping failed)"
+    continue
+  fi
+
+  # rtt may be decimal; compare numerically by scaling
+  rtt_scaled="$(awk -v v="$rtt" 'BEGIN{printf("%d", v*1000)}')"
+  log "Measured $name ($host): avg ${rtt} ms" | tee -a "$LOG"
+
+  if (( rtt_scaled < best_ping_ms )); then
+    best_ping_ms="$rtt_scaled"
+    best_conf="$name"
+  fi
+done
+
+if [[ -z "${best_conf}" ]]; then
+  log "No valid VPN endpoints found; leaving current state as-is" | tee -a "$LOG"
+  exit 1
 fi
 
-# Keep metrics in assoc arrays (bash)
-declare -A LAT SPD SCORE
+best_human="$(awk -v v="$best_ping_ms" 'BEGIN{printf("%.2f", v/1000)}')"
+log "Fastest endpoint: ${best_conf} (${best_human} ms)" | tee -a "$LOG"
 
-# Bring down any existing wg interface (clean slate while testing)
+# Bring any existing tunnels down
 for ifc in $(wg show interfaces 2>/dev/null || true); do
-  wg-quick down "$ifc" >/dev/null 2>&1 || true
+  wg-quick down "$ifc" || true
 done
 
-measure_profile() {
-  local name="$1"
-
-  # Ensure the interface name equals profile name
-  ip link show "$name" >/dev/null 2>&1 && wg-quick down "$name" >/dev/null 2>&1 || true
-
-  if ! wg-quick up "$name" >/dev/null 2>&1; then
-    log "FAILED to bring up $name" | tee -a "$LOG_FILE"
-    LAT["$name"]=10000
-    SPD["$name"]=0
-    SCORE["$name"]=999999
-    return
-  fi
-
-  # Latency through tunnel
-  local lat
-  lat="$(ping -c "${PING_COUNT}" -W 2 "$PING_TARGET" 2>/dev/null | awk -F'/' '/rtt/ {print $5+0}')"
-  [ -z "$lat" ] && lat=10000
-
-  # Quick throughput probe (5s cap). speed_download is bytes/sec.
-  local bps mbps
-  bps="$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "$SPEED_URL" || echo 0)"
-  # bytes/sec -> Mbps
-  mbps="$(awk -v b="$bps" 'BEGIN{printf "%.2f",(b*8)/1000000}')"
-
-  # Score: lower is better. Heavier weight on latency; speed reduces penalty.
-  # penalty_from_speed = 1000/(Mbps+0.1)
-  local penalty score
-  penalty="$(awk -v s="$mbps" 'BEGIN{printf "%.2f", 1000/(s+0.1)}')"
-  score="$(awk -v l="$lat" -v p="$penalty" 'BEGIN{printf "%.2f", (l*0.6)+(p*0.4)}')"
-
-  LAT["$name"]="$lat"
-  SPD["$name"]="$mbps"
-  SCORE["$name"]="$score"
-
-  log "$name → latency=${lat}ms speed=${mbps}Mbps score=${score}" | tee -a "$LOG_FILE"
-}
-
-best_name=""
-best_score=999999
-
-# Test each profile
-for f in "${profiles[@]}"; do
-  name="$(basename "${f%.conf}")"
-  log "Testing profile: $name" | tee -a "$LOG_FILE"
-  measure_profile "$name"
-  # Track best
-  if awk "BEGIN{exit !(${SCORE[$name]} < $best_score)}"; then
-    best_name="$name"
-    best_score="${SCORE[$name]}"
-  fi
-done
-
-if [ -z "$best_name" ]; then
-  log "No usable profiles measured — leaving VPN down." | tee -a "$LOG_FILE"
-  exit 0
-fi
-
-log "Best candidate: $best_name (lat=${LAT[$best_name]}ms, spd=${SPD[$best_name]}Mbps, score=${SCORE[$best_name]})" | tee -a "$LOG_FILE"
-
-# Decide whether to switch from the currently-up interface (if any)
-current_if="$(wg show interfaces 2>/dev/null | head -n1 || true)"
-
-need_switch=0
-if [ -z "$current_if" ] || [ "$current_if" != "$best_name" ]; then
-  need_switch=1
+# Connect to the best one
+if wg-quick up "$best_conf"; then
+  log "Connected to $best_conf" | tee -a "$LOG"
 else
-  # Re-evaluate thresholds for current_if
-  cur_lat="${LAT[$current_if]:-10000}"
-  cur_spd="${SPD[$current_if]:-0}"
-  cur_score="${SCORE[$current_if]:-999999}"
-
-  # Threshold checks
-  if awk "BEGIN{exit !($cur_lat > $MAX_LATENCY_MS)}"; then need_switch=1; fi
-  if awk "BEGIN{exit !($cur_spd < $MIN_SPEED_Mbps)}"; then need_switch=1; fi
-  # Margin to best
-  if awk "BEGIN{exit !(($cur_score - $best_score) > $MARGIN_SCORE)}"; then need_switch=1; fi
+  log "Failed to bring up $best_conf" | tee -a "$LOG"
+  exit 1
 fi
-
-if [ "$need_switch" -eq 1 ]; then
-  log "Switching to $best_name ..." | tee -a "$LOG_FILE"
-  # Bring all down, then up the best
-  for ifc in $(wg show interfaces 2>/dev/null || true); do
-    wg-quick down "$ifc" >/dev/null 2>&1 || true
-  done
-  wg-quick up "$best_name"
-  log "Connected → $best_name" | tee -a "$LOG_FILE"
-else
-  log "Keeping current VPN: $current_if" | tee -a "$LOG_FILE"
-fi
-
-# Friendly breadcrumb in system log as well
-logger -t wg-autoswitch "best=$best_name lat=${LAT[$best_name]}ms spd=${SPD[$best_name]}Mbps score=${SCORE[$best_name]}"

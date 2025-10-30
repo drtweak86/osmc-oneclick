@@ -34,7 +34,7 @@ notify "Backups" "Uploading to Google Drive…"
 log "Uploading to $REMOTE/$STAMP/"
 $RCLONE copy "$BACKUP_FILE" "$REMOTE/$STAMP/" --fast-list
 
-# Retention: keep newest 3 folders (portable)
+# Retention: keep newest 3 folders (portable; no --sort)
 log "Applying retention (keep newest 3)"
 OLD_DIRS="$(
   $RCLONE lsf --dirs-only -F "t p" -s $'\t' "$REMOTE" \

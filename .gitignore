@@ -10,3 +10,8 @@ wg-agekey.txt
 
 # logs
 *.log
+
+cd /opt/osmc-oneclick
+printf "%s\n" \
+"osmc-vpn-configs/" "*.conf" "*.wg" "*.key" "*.crt" "*.pem" \
+".secrets/" ".env" >> .gitignore

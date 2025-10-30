@@ -1,54 +1,38 @@
 #!/usr/bin/env bash
-# Re-bake phases/assets/install into an existing image (handy to fix older builds)
-# Usage: sudo ./rebake-into-image.sh XBIAN.img
+# rebake-into-image.sh — inject updated /opt/osmc-oneclick into existing image
+# Usage: sudo ./rebake-into-image.sh /home/admin/xbian-oneclick.img
+
 set -euo pipefail
 
-IMG="${1:-}"
-[[ -f "$IMG" ]] || { echo "Usage: $0 XBIAN.img" >&2; exit 1; }
+IMAGE="${1:-}"
+[ -z "$IMAGE" ] && { echo "Usage: $0 /path/to/image.img"; exit 1; }
 
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SELF_DIR/.." && pwd)"
-PHASES="$ROOT_DIR/phases"
-ASSETS="$ROOT_DIR/assets"
-INSTALL="$ROOT_DIR/install.sh"
+WORKDIR="/tmp/verify-oneclick.$RANDOM"
+mkdir -p "$WORKDIR"
 
-TMP="$(mktemp -d)"; trap 'set +e; [[ -n "${LOOP:-}" ]] && losetup -d "$LOOP" 2>/dev/null; umount "$TMP/boot" "$TMP/root" 2>/dev/null; rm -rf "$TMP"' EXIT
+echo "[*] Attaching image: $IMAGE"
+sudo modprobe loop
+LOOP=$(sudo losetup --show -f -P "$IMAGE")
 
-echo "[rebake] attach"
-LOOP="$(losetup --show -Pf "$IMG")"; sleep 1
-mkdir -p "$TMP/boot" "$TMP/root"
-mount -o rw "${LOOP}p1" "$TMP/boot"
-mount -o rw "${LOOP}p2" "$TMP/root"
+# Find root and boot partitions
+ROOTPART="${LOOP}p2"
+BOOTPART="${LOOP}p1"
+echo "[*] Mounting rootfs and boot partitions..."
+sudo mkdir -p "$WORKDIR/root" "$WORKDIR/boot"
+sudo mount "$ROOTPART" "$WORKDIR/root"
+sudo mount "$BOOTPART" "$WORKDIR/boot"
 
-OC="$TMP/root/opt/osmc-oneclick"
-mkdir -p "$OC"
-rsync -a --delete "$PHASES/" "$OC/phases/"
-rsync -a --delete "$ASSETS/" "$OC/assets/"
-install -m 0755 "$INSTALL" "$OC/install.sh"
+echo "[*] Syncing /opt/osmc-oneclick into image..."
+sudo mkdir -p "$WORKDIR/root/opt/osmc-oneclick"
+sudo rsync -a --delete /opt/osmc-oneclick/ "$WORKDIR/root/opt/osmc-oneclick/"
 
-# ensure unit + defaults
-UNIT="$TMP/root/etc/systemd/system/oneclick-firstboot.service"
-mkdir -p "$(dirname "$UNIT")"
-cat >"$UNIT" <<'EOF'
-[Unit]
-Description=OneClick first boot
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /boot/firstboot.sh
-RemainAfterExit=no
-[Install]
-WantedBy=multi-user.target
-EOF
-ln -sf ../oneclick-firstboot.service \
-  "$TMP/root/etc/systemd/system/multi-user.target.wants/oneclick-firstboot.service" 2>/dev/null || true
+echo "[*] Injecting firstboot.sh into /boot..."
+sudo cp /opt/osmc-oneclick/scripts/firstboot.sh "$WORKDIR/boot/firstboot.sh"
+sudo chmod +x "$WORKDIR/boot/firstboot.sh"
 
-mkdir -p "$TMP/root/etc/default"
-cp -f "$ASSETS/config/wifi-autoswitch" "$TMP/root/etc/default/wifi-autoswitch"
-cp -f "$ASSETS/config/wg-autoswitch"   "$TMP/root/etc/default/wg-autoswitch"
+echo "[*] Cleaning up..."
+sudo umount "$WORKDIR/root" "$WORKDIR/boot"
+sudo losetup -d "$LOOP"
+rm -rf "$WORKDIR"
 
-sync
-umount "$TMP/boot" "$TMP/root"
-losetup -d "$LOOP"
-echo "[rebake] done"
+echo "[✓] Re-bake complete!"

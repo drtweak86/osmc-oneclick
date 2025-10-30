@@ -1,1 +1,10 @@
+[Unit]
+Description=Run OneClick status daily at 03:00
 
+[Timer]
+OnCalendar=03:00
+Persistent=true
+Unit=oneclick-status.service
+
+[Install]
+WantedBy=timers.target

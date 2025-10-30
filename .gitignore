@@ -1,27 +1,21 @@
-# secrets / bundles (never commit)
-wg-secrets.tar.age
-wg-agekey.txt
-*.conf
-
-# local image artifacts
+# Build outputs
 *.img
 *.img.gz
 *.zip
-
-# logs
+*.sha256
 *.log
 
-cd /opt/osmc-oneclick
-printf "%s\n" \
-"osmc-vpn-configs/" "*.conf" "*.wg" "*.key" "*.crt" "*.pem" \
-".secrets/" ".env" >> .gitignore
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*.swp
+.DS_Store
 
-# keep secrets off GitHub
-osmc-vpn-configs/
-*.conf
-*.wg
-*.key
-*.crt
-*.pem
-.secrets/
-.env
+# Mounts
+/mnt/
+/media/
+/loop*/
+
+# Local workdir
+/xtreme-work/

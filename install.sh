@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OneClick full installer for OSMC / Kodi 21 (Omega)
-# Handles dependency setup, Google Drive backup phase, add-ons, skin, and advanced settings.
+# Self-healing: creates dirs, normalizes phases, fetches missing scripts, or stubs them.
 
 set -euo pipefail
 
@@ -8,79 +8,153 @@ BASE_DIR="/opt/osmc-oneclick"
 ASSETS="$BASE_DIR/assets"
 PHASES="$BASE_DIR/phases"
 LOGFILE="/var/log/osmc-oneclick-install.log"
+RAW_BASE="https://raw.githubusercontent.com/drtweak86/osmc-oneclick/main"
 
 log()   { echo "[oneclick][install] $*" | tee -a "$LOGFILE"; }
 warn()  { echo "[oneclick][WARN] $*" | tee -a "$LOGFILE" >&2; }
 error() { echo "[oneclick][ERROR] $*" | tee -a "$LOGFILE" >&2; exit 1; }
 
-log "Starting OneClick installer..."
+trap 'rc=$?; [ $rc -ne 0 ] && echo "[oneclick][ERROR] install.sh failed (rc=$rc). See $LOGFILE" | tee -a "$LOGFILE"' EXIT
 
-# --- Ensure unzip & latest rclone are present ---
-if ! command -v unzip >/dev/null 2>&1; then
-  log "Installing unzip and CA certificates..."
-  apt-get update -y || true
-  apt-get install -y unzip ca-certificates || true
-fi
-
-ensure_latest_rclone() {
-  curl -fsSL https://rclone.org/install.sh | bash
+# --- helpers ---------------------------------------------------------------
+retry() {
+  # retry <n> <sleep_seconds> <cmd...>
+  local n=$1 s=$2; shift 2
+  local i
+  for i in $(seq 1 "$n"); do
+    if "$@"; then return 0; fi
+    warn "Retry $i/$n failed: $*"
+    sleep "$s"
+  done
+  return 1
 }
 
+ensure_dir() { mkdir -p "$1"; }
+normalize_sh() { sed -i 's/\r$//' "$1"; sed -i '1s|^#!.*|#!/usr/bin/env bash|' "$1"; chmod +x "$1"; }
+
+stub_body() {
+  cat <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "[oneclick][phase] $(basename "$0") (stub) — nothing to do" >&2
+exit 0
+SH
+}
+
+fetch_or_stub() {
+  # fetch_or_stub <relative_path_under_repo>
+  local rel="$1"
+  local dst="$BASE_DIR/$rel"
+  local url="$RAW_BASE/$rel"
+  ensure_dir "$(dirname "$dst")"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL "$url" -o "$dst"; then
+      log "Fetched $rel from repo"
+      normalize_sh "$dst" || true
+      return 0
+    fi
+  fi
+  warn "Could not fetch $rel — writing stub"
+  stub_body >"$dst"
+  normalize_sh "$dst"
+}
+
+ensure_phase_exec() {
+  # ensure_phase_exec phases/XX_name.sh
+  local rel="$1" p="$BASE_DIR/$1"
+  if [ ! -f "$p" ]; then
+    fetch_or_stub "$rel"
+  else
+    normalize_sh "$p"
+  fi
+}
+
+# --- bootstrap filesystem ---------------------------------------------------
+ensure_dir "$BASE_DIR" "$ASSETS" "$PHASES"
+touch "$LOGFILE" || true
+
+log "Starting OneClick installer (self-healing)…"
+
+# --- Ensure unzip & latest rclone are present ------------------------------
+if ! command -v unzip >/dev/null 2>&1; then
+  log "Installing unzip and CA certificates..."
+  retry 2 5 apt-get update -y || true
+  retry 2 5 apt-get install -y unzip ca-certificates || true
+fi
+
+ensure_latest_rclone() { curl -fsSL https://rclone.org/install.sh | bash; }
+
 if ! command -v rclone >/dev/null 2>&1; then
-  log "rclone not found — installing..."
-  ensure_latest_rclone
+  log "rclone not found — installing…"
+  retry 2 5 bash -c 'curl -fsSL https://rclone.org/install.sh | bash' || warn "rclone install script failed"
 else
   need_ver="1.68"
   have_ver="$(rclone version 2>/dev/null | sed -n 's/^rclone v\([0-9.]\+\).*/\1/p')"
-  if [ -n "$have_ver" ]; then
-    if [ "$(printf '%s\n' "$need_ver" "$have_ver" | sort -V | head -n1)" = "$have_ver" ] && [ "$have_ver" != "$need_ver" ]; then
-      log "rclone $have_ver < $need_ver — upgrading..."
-      ensure_latest_rclone
-    else
-      log "rclone $have_ver OK (>= $need_ver)"
-    fi
+  if [ -n "${have_ver:-}" ] && [ "$(printf '%s\n' "$need_ver" "$have_ver" | sort -V | head -n1)" = "$have_ver" ] && [ "$have_ver" != "$need_ver" ]; then
+    log "rclone $have_ver < $need_ver — upgrading…"
+    retry 2 5 bash -c 'curl -fsSL https://rclone.org/install.sh | bash' || warn "rclone upgrade failed"
   else
-    log "rclone version unknown — upgrading..."
-    ensure_latest_rclone
+    log "rclone ${have_ver:-unknown} OK (>= $need_ver)"
   fi
 fi
 
-# --- Run backup + maintenance setup ---
+# --- Make sure mediacenter (Kodi) can be controlled later ------------------
+if ! systemctl is-enabled mediacenter >/dev/null 2>&1; then
+  log "Enabling mediacenter service…"
+  systemctl enable mediacenter || true
+fi
+
+# --- Ensure all phases exist (fetch or stub) --------------------------------
+# Core phases we use:
+for rel in \
+  "phases/31_helpers.sh" \
+  "phases/41_backup.sh" \
+  "phases/42_addons.sh" \
+  "phases/43_skin.sh" \
+  "phases/44_advanced.sh" \
+  "phases/21_pi_tune.sh" \
+  "phases/22_argon_one.sh"
+do
+  ensure_phase_exec "$rel"
+done
+
+# Re-source helpers after normalization
+# shellcheck disable=SC1091
+. "$PHASES/31_helpers.sh" 2>/dev/null || true
+
+# --- Systemd daemon-reload just in case new units arrived -------------------
+systemctl daemon-reload || true
+
+# --- Run backup + maintenance setup ----------------------------------------
 if [ -x "$PHASES/41_backup.sh" ]; then
-  log "Installing backup + maintenance timers..."
-  systemctl enable --now oneclick-maint.timer || true
-  systemctl enable --now oneclick-backup.timer || true
+  log "Installing backup + maintenance timers…"
+  systemctl enable --now oneclick-maint.timer || warn "maint.timer enable failed"
+  systemctl enable --now oneclick-backup.timer || warn "backup.timer enable failed"
 else
-  warn "41_backup.sh not found or not executable — skipping timers."
+  warn "41_backup.sh not executable — skipping timers."
 fi
 
-# --- Add-ons phase ---
-if [ -x "$PHASES/42_addons.sh" ]; then
-  log "Running add-on installation phase..."
-  bash "$PHASES/42_addons.sh"
-else
-  warn "42_addons.sh missing — skipping add-ons."
-fi
+# --- Optional: Pi performance tuning ---------------------------------------
+log "Running Raspberry Pi tuning (21_pi_tune.sh)…"
+bash "$PHASES/21_pi_tune.sh" || warn "Pi tuning returned non-zero"
 
-# --- Apply Arctic Fuse 2 skin and fonts ---
-log "Installing Arctic Fuse 2 skin and fonts..."
-sudo -u osmc mkdir -p /home/osmc/.kodi/addons/skin.arctic.fuse.2/fonts
-sudo cp -r "$ASSETS/skin.arctic.fuse.2" /home/osmc/.kodi/addons/
-sudo cp "$ASSETS/fonts/"*.ttf /home/osmc/.kodi/addons/skin.arctic.fuse.2/fonts/
-sudo cp "$ASSETS/skin.arctic.fuse.2/1080i/Font.xml" /home/osmc/.kodi/addons/skin.arctic.fuse.2/1080i/
-sudo chown -R osmc:osmc /home/osmc/.kodi/addons/skin.arctic.fuse.2
+# --- Argon One Pi4 V2 fan control setup ------------------------------------
+log "Running Argon One setup (22_argon_one.sh)…"
+bash "$PHASES/22_argon_one.sh" || warn "Argon setup returned non-zero"
 
-# --- Apply advancedsettings.xml ---
-if [ -f "$ASSETS/config/advancedsettings.xml" ]; then
-  log "Installing advancedsettings.xml"
-  sudo -u osmc mkdir -p /home/osmc/.kodi/userdata
-  sudo cp "$ASSETS/config/advancedsettings.xml" /home/osmc/.kodi/userdata/advancedsettings.xml
-  sudo chown osmc:osmc /home/osmc/.kodi/userdata/advancedsettings.xml
-else
-  warn "advancedsettings.xml not found in assets/config — skipping."
-fi
+# --- Add-ons phase ----------------------------------------------------------
+log "Running add-on installation phase (42_addons.sh)…"
+bash "$PHASES/42_addons.sh" || warn "Add-ons phase returned non-zero"
 
-# --- Final cleanup & confirmation ---
-log "Installation complete!"
-sudo -u osmc /usr/bin/kodi-send -a "Notification(Setup Complete,OneClick Installer finished successfully,8000)" || true
+# --- Skin + fonts (Arctic Fuse 2 + EXO2) -----------------------------------
+log "Applying skin and fonts (43_skin.sh)…"
+bash "$PHASES/43_skin.sh" || warn "Skin phase returned non-zero"
+
+# --- Advanced settings (no cache overrides on Kodi 21) ----------------------
+log "Applying advancedsettings + GUI presets (44_advanced.sh)…"
+bash "$PHASES/44_advanced.sh" || warn "Advanced phase returned non-zero"
+
+# --- Finish up --------------------------------------------------------------
+log "OneClick install complete."
+echo "[oneclick][install] You can reboot or restart Kodi with: sudo systemctl restart mediacenter" | tee -a "$LOGFILE"
 exit 0

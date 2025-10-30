@@ -22,17 +22,12 @@ fi
 # -------- Tunables (override via env if desired) ----------------------------
 ARM_FREQ="${ARM_FREQ:-2000}"        # MHz
 GPU_FREQ="${GPU_FREQ:-750}"         # MHz
-OVER_VOLTAGE="${OVER_VOLTAGE:-6}"   # -16..8 (firmware-accepted range)
+OVER_VOLTAGE="${OVER_VOLTAGE:-6}"   # -16..8
 GPU_MEM="${GPU_MEM:-320}"           # MB
 DTO="${DTO:-vc4-kms-v3d,cma-512}"   # KMS + larger CMA for 4K UI/HEVC
 
 # -------- Basic sanity on values -------------------------------------------
-clamp() {
-  local v=$1 lo=$2 hi=$3
-  [ "$v" -lt "$lo" ] && v=$lo
-  [ "$v" -gt "$hi" ] && v=$hi
-  echo "$v"
-}
+clamp() { local v=$1 lo=$2 hi=$3; [ "$v" -lt "$lo" ] && v=$lo; [ "$v" -gt "$hi" ] && v=$hi; echo "$v"; }
 ARM_FREQ="$(clamp "$ARM_FREQ" 1500 2200)"
 GPU_FREQ="$(clamp "$GPU_FREQ" 500 800)"
 OVER_VOLTAGE="$(clamp "$OVER_VOLTAGE" -16 8)"

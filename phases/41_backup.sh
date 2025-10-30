@@ -32,6 +32,11 @@ else
   fi
 fi
 # --- end rclone ensure block ---
+
+# Ensure new binaries are picked up and PATH is sane under systemd
+hash -r
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 set -euo pipefail
 
 # --- Config (change if you want) ---

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # phases/05_pi_tune.sh
-# Raspberry Pi 4B media optimisation (OC + GPU mem) using a per-file include.
-# Idempotent; safe defaults; only applies on Pi 4.
+# Raspberry Pi 4B media optimisation (OC + GPU mem) via per-file include.
+# Idempotent; safe defaults; Pi 4 only.
 
 set -euo pipefail
 say(){ echo "[oneclick][05_pi_tune] $*"; }
@@ -20,12 +20,29 @@ if ! grep -q "Raspberry Pi 4" /proc/device-tree/model 2>/dev/null; then
 fi
 
 # -------- Tunables (override via env if desired) ----------------------------
-ARM_FREQ="${ARM_FREQ:-2000}"
-GPU_FREQ="${GPU_FREQ:-750}"
-OVER_VOLTAGE="${OVER_VOLTAGE:-6}"
-GPU_MEM="${GPU_MEM:-320}"
-# VC4 KMS with a larger CMA pool helps 4K UI / HEVC
-DTO="${DTO:-vc4-kms-v3d,cma-512}"
+ARM_FREQ="${ARM_FREQ:-2000}"        # MHz
+GPU_FREQ="${GPU_FREQ:-750}"         # MHz
+OVER_VOLTAGE="${OVER_VOLTAGE:-6}"   # -16..8 (firmware-accepted range)
+GPU_MEM="${GPU_MEM:-320}"           # MB
+DTO="${DTO:-vc4-kms-v3d,cma-512}"   # KMS + larger CMA for 4K UI/HEVC
+
+# -------- Basic sanity on values -------------------------------------------
+clamp() {
+  local v=$1 lo=$2 hi=$3
+  [ "$v" -lt "$lo" ] && v=$lo
+  [ "$v" -gt "$hi" ] && v=$hi
+  echo "$v"
+}
+ARM_FREQ="$(clamp "$ARM_FREQ" 1500 2200)"
+GPU_FREQ="$(clamp "$GPU_FREQ" 500 800)"
+OVER_VOLTAGE="$(clamp "$OVER_VOLTAGE" -16 8)"
+GPU_MEM="$(clamp "$GPU_MEM" 256 512)"
+
+# -------- Backup active boot config (once) ----------------------------------
+if [ ! -f "${BOOT_CFG}.oneclick.bak" ]; then
+  cp -a "$BOOT_CFG" "${BOOT_CFG}.oneclick.bak" || true
+  say "Backed up $(basename "$BOOT_CFG") -> $(basename "${BOOT_CFG}.oneclick.bak")"
+fi
 
 # -------- Write per-file config ---------------------------------------------
 mkdir -p "$CFG_DIR"

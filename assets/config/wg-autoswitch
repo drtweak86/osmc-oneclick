@@ -1,13 +1,8 @@
-# Default config for VPN autoswitcher (streaming aware)
-# Placed to /etc/default/wg-autoswitch by the installer or baked image.
-
-MIN_DL_MBIT=12          # minimum acceptable download Mbps
-MAX_RTT_MS=80           # maximum acceptable average RTT
-MAX_LOSS_PCT=2          # maximum acceptable packet loss %
-TEST_BYTES=$((4*1024*1024))   # size for partial download test (~4MB)
-PING_TARGET=1.1.1.1
-LOG_FILE=/var/log/wg-autoswitch.log
-ICON=""
-
-# Candidate tunnels (must match your /etc/wireguard/*.conf names)
-CANDIDATES=( de-ber nl-ams uk-lon uk-man us-nyc )
+WIFI_IFACE="wlan0"
+MIN_SIGNAL_PCT=55
+WARN_SIGNAL_PCT=60
+RUN_EVERY_SEC=120
+KODI_NOTIFY=1
+PREFERRED_SSIDS=("Batcave" "🐢")
+AUTO_SWITCH=1
+SWITCH_DELTA_DB=5

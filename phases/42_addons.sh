@@ -18,6 +18,7 @@ REPOS=(
   "Otaku|https://goldenfreddy0703.github.io/repository.otaku/|repository\.otaku.*\.zip"
   "CocoScrapers|https://cocojoe2411.github.io/|repository\.cocoscrapers.*\.zip"
   "OptiKlean|https://www.digitalking.it/kodi-repo/|repository\.optiklean.*\.zip"
+  "jurialmunkey|https://jurialmunkey.github.io/repository.jurialmunkey/|repository\jurialmunkey.*\.zip"
 )
 
 for entry in "${REPOS[@]}"; do
@@ -43,6 +44,7 @@ ADDONS=(
   "script.trakt"
   "script.artwork.dump"
   "plugin.program.optiklean"
+  "skin.arctic.fuse.2"
 )
 
 for addon in "${ADDONS[@]}"; do

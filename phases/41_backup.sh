@@ -1,4 +1,37 @@
 #!/usr/bin/env bash
+# --- Ensure unzip & latest rclone are present (safe to run repeatedly) ---
+# Note: this phase runs as root under systemd, so apt-get is allowed.
+if ! command -v unzip >/dev/null 2>&1; then
+  apt-get update -y || true
+  apt-get install -y unzip ca-certificates || true
+fi
+
+ensure_latest_rclone() {
+  # Install/upgrade from official rclone script
+  curl -fsSL https://rclone.org/install.sh | bash
+}
+
+if ! command -v rclone >/dev/null 2>&1; then
+  echo "[oneclick][41_backup] rclone not found — installing…"
+  ensure_latest_rclone
+else
+  # Optional: upgrade if older than a minimum you trust (e.g., 1.68)
+  need_ver="1.68"
+  have_ver="$(rclone version 2>/dev/null | sed -n 's/^rclone v\([0-9.]\+\).*/\1/p')"
+  if [ -n "$have_ver" ]; then
+    # If have_ver < need_ver, upgrade
+    if [ "$(printf '%s\n' "$need_ver" "$have_ver" | sort -V | head -n1)" = "$have_ver" ] && [ "$have_ver" != "$need_ver" ]; then
+      echo "[oneclick][41_backup] rclone $have_ver < $need_ver — upgrading…"
+      ensure_latest_rclone
+    else
+      echo "[oneclick][41_backup] rclone $have_ver OK (>= $need_ver)"
+    fi
+  else
+    echo "[oneclick][41_backup] rclone version unknown — upgrading…"
+    ensure_latest_rclone
+  fi
+fi
+# --- end rclone ensure block ---
 set -euo pipefail
 
 # --- Config (change if you want) ---

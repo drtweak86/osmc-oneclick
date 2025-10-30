@@ -72,3 +72,9 @@ toast_vpn_once() {
     printf '%s' "$key" > "$state"
   fi
 }
+kodi_dialog() {
+  # kodi GUI modal dialog
+  # $1 = heading, $2 = message
+  command -v kodi-send >/dev/null 2>&1 || return 0
+  kodi-send --action="Notification($1,$2,8000,/home/osmc/.kodi/media/notify/icons/info.png)" >/dev/null 2>&1 || true
+}

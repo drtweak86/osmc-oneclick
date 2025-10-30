@@ -1,38 +1,69 @@
 #!/usr/bin/env bash
 # phases/44_advanced.sh
-# Install advancedsettings.xml from assets/config (no legacy cache overrides)
+# Install advancedsettings.xml from assets/config (no cache overrides for Kodi 21+).
+# - Idempotent (skips if unchanged)
+# - Atomic replace with backup
+# - Optional XML sanity check if xmllint is available
 
 set -euo pipefail
+
+# Helpers (log/warn/kodi_dialog)
 . "$(dirname "$0")/31_helpers.sh"
 
-USER="osmc"
+USER="${USER:-osmc}"
 KODI_HOME="/home/${USER}/.kodi"
 USERDATA="${KODI_HOME}/userdata"
-ASSET_AS="${BASE_DIR:-/opt/osmc-oneclick}/assets/config/advancedsettings.xml"
+
+# Allow BASE_DIR override, otherwise default
+BASE_DIR="${BASE_DIR:-/opt/osmc-oneclick}"
+ASSET_AS="${BASE_DIR}/assets/config/advancedsettings.xml"
 DEST_AS="${USERDATA}/advancedsettings.xml"
 
-log "[advanced] Installing advancedsettings.xml"
+log "[advanced] Preparing to install advancedsettings.xml"
+log "[advanced] Source: ${ASSET_AS}"
+log "[advanced] Dest:   ${DEST_AS}"
 
+# --- Sanity checks ---
 if [[ ! -f "${ASSET_AS}" ]]; then
-  warn "[advanced] ${ASSET_AS} not found. Skipping."
+  warn "[advanced] Source file not found; skipping."
   exit 0
+fi
+
+# Optional: XML validation if tool exists
+if command -v xmllint >/dev/null 2>&1; then
+  if ! xmllint --noout "${ASSET_AS}" 2>/dev/null; then
+    warn "[advanced] XML validation failed; aborting to avoid a broken config."
+    exit 1
+  fi
 fi
 
 mkdir -p "${USERDATA}"
 
-# Only replace if changed; back up existing first
+# If unchanged, skip
 if [[ -f "${DEST_AS}" ]] && cmp -s "${ASSET_AS}" "${DEST_AS}"; then
-  log "[advanced] Already up to date"
-else
-  if [[ -f "${DEST_AS}" ]]; then
-    cp -a "${DEST_AS}" "${DEST_AS}.bak.$(date +%Y%m%d%H%M%S)" || true
-  fi
-  install -o "${USER}" -g "${USER}" -m 0644 "${ASSET_AS}" "${DEST_AS}"
-  log "[advanced] Installed to ${DEST_AS}"
-  if command -v kodi-send >/dev/null 2>&1; then
-    sudo -u "${USER}" kodi-send -a "Notification(Advanced,advancedsettings.xml installed,6000)" || true
-  fi
+  log "[advanced] Already up to date; nothing to do."
+  exit 0
 fi
 
+# Backup existing, if any
+if [[ -f "${DEST_AS}" ]]; then
+  BAK="${DEST_AS}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -a "${DEST_AS}" "${BAK}" || true
+  log "[advanced] Backed up existing to ${BAK}"
+fi
+
+# Atomic install (write to temp then move)
+TMP="$(mktemp "${DEST_AS}.XXXXXX")"
+install -o "${USER}" -g "${USER}" -m 0644 "${ASSET_AS}" "${TMP}"
+mv -f "${TMP}" "${DEST_AS}"
+
+# Ensure ownership on userdata (defensive)
 chown -R "${USER}:${USER}" "${KODI_HOME}" || true
-log "[advanced] Done."
+
+# Nice toast in Kodi if available
+if command -v kodi-send >/dev/null 2>&1; then
+  sudo -u "${USER}" kodi-send -a "Notification(Advanced,advancedsettings.xml installed,6000)" || true
+fi
+
+log "[advanced] Installed advancedsettings.xml successfully."
+exit 0

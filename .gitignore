@@ -1,0 +1,12 @@
+# secrets / bundles (never commit)
+wg-secrets.tar.age
+wg-agekey.txt
+*.conf
+
+# local image artifacts
+*.img
+*.img.gz
+*.zip
+
+# logs
+*.log

@@ -8,14 +8,16 @@ WIFI_IFACE="wlan0"
 # --- Streaming thresholds ---
 STREAM_RSSI_DBM=-68     # warn if link weaker (more negative)
 MIN_SIGNAL_PCT=55       # ConnMan % equivalent
+WARN_SIGNAL_PCT=60      # toast if signal dips below this
 
 # --- Timer interval (seconds) ---
-RUN_EVERY_SEC=120
+RUN_EVERY_SEC=120       # controlled by systemd timer
 
 # --- Kodi toast notifications ---
 KODI_NOTIFY=1
 
 # --- Preferred networks (in priority order) ---
+# Replace these SSIDs with yours if needed
 PREFERRED_SSIDS=("Batcave" "🐢")
 
 # --- Switching logic ---

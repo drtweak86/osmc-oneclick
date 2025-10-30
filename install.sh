@@ -109,15 +109,27 @@ fi
 
 # --------------------- ensure phases exist (fetch or stub) -------------------
 for rel in \
+  "phases/04_prereqs.sh" \
+  "phases/05_pi_tune.sh" \
+  "phases/20_optimize.sh" \
+  "phases/22_argon_one.sh" \
+  "phases/30_vpn.sh" \
   "phases/31_helpers.sh" \
+  "phases/31_toast.sh" \
+  "phases/31_vpn_autoswitch.sh" \
+  "phases/32_enable_autoswitch.sh" \
+  "phases/33_install_speedtest.sh" \
+  "phases/33_wifi_autoswitch.sh" \
+  "phases/40_backup.sh" \
+  "phases/40_maintenance.sh" \
   "phases/41_backup.sh" \
   "phases/42_addons.sh" \
-  "phases/43_skin.sh" \
   "phases/43_fonts.sh" \
   "phases/44_advanced.sh" \
-  "phases/20_optimize.sh" \
-  "phases/22_argon_one.sh"
+  "phases/45_kodi_qol.sh"
 do
+  ensure_phase_exec "$rel"
+done
   ensure_phase_exec "$rel"
 done
 

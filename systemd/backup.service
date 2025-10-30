@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Google Drive backup (rclone)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash /opt/osmc-oneclick/phases/40_backup.sh
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

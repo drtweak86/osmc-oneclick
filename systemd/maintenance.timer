@@ -1,0 +1,10 @@
+[Unit]
+Description=Run weekly maintenance
+
+[Timer]
+OnCalendar=Sat 04:00
+Persistent=true
+Unit=maintenance.service
+
+[Install]
+WantedBy=timers.target

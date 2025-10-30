@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<advancedsettings>
+
+  <!-- =========================================================
+       LOGGING (quiet by default, easy to turn up when needed)
+       ========================================================= -->
+  <log>
+    <!-- 0=NONE, 1=NORMAL/INFO, 2=DEBUG. Keep WARN-ish output: -->
+    <loglevel>1</loglevel>
+    <!-- Write timestamps to help diagnose intermittent issues -->
+    <showtimestamps>true</showtimestamps>
+  </log>
+
+  <!-- =========================================================
+       NETWORK TIMEOUTS (reduce hung streams & sloooow providers)
+       ========================================================= -->
+  <network>
+    <!-- Seconds to wait for HTTP(S) connect -->
+    <curlclienttimeout>20</curlclienttimeout>
+    <!-- Seconds of low throughput before aborting -->
+    <curllowspeedtime>20</curllowspeedtime>
+    <!-- Consider a source “slow” if under X bytes/sec for the above window -->
+    <curllowspeedlimit>1</curllowspeedlimit>
+    <!-- DNS cache entries (helps when providers flip hosts) -->
+    <dnscachettl>600</dnscachettl>
+  </network>
+
+  <!-- =========================================================
+       SMB / WINDOWS SHARES (works great for NAS / Win shares)
+       ========================================================= -->
+  <smb>
+    <!-- Prefer modern SMB versions for speed and security -->
+    <minprotocol>SMB2</minprotocol>
+    <maxprotocol>SMB3</maxprotocol>
+    <!-- Timeout in seconds for slow/disconnected shares -->
+    <clienttimeout>30</clienttimeout>
+    <!-- Optional: if your NAS needs legacy auth, leave off unless required -->
+    <!-- <requiresign>false</requiresign> -->
+  </smb>
+
+  <!-- =========================================================
+       FILE LISTS & SORTING (cleaner titles, better browsing)
+       ========================================================= -->
+  <filelists>
+    <!-- Hide file extensions in lists -->
+    <hideextensions>true</hideextensions>
+    <!-- Treat “The/An/A” properly for sorting -->
+    <ignorethewhensorting>true</ignorethewhensorting>
+    <!-- Show parent folder item (“..”) only when needed -->
+    <showparentdiritems>false</showparentdiritems>
+  </filelists>
+
+  <!-- Tokens the sorter will ignore at the start of titles -->
+  <sorttokens>
+    <token>The </token>
+    <token>A </token>
+    <token>An </token>
+    <token>Le </token>
+    <token>La </token>
+    <token>Les </token>
+    <token>El </token>
+    <token>Los </token>
+    <token>Las </token>
+    <token>Der </token>
+    <token>Die </token>
+    <token>Das </token>
+    <token>L’</token>
+  </sorttokens>
+
+  <!-- =========================================================
+       SUBTITLES (defaults that make life nicer)
+       ========================================================= -->
+  <subtitles>
+    <!-- Preferred search languages (comma-separated ISO 639-1) -->
+    <languages>en</languages>
+    <!-- Show subtitles by default only for non-native audio tracks -->
+    <subtitleassoverride>false</subtitleassoverride>
+    <!-- Force-subtitle handling stays to GUI; no hard override here -->
+    <streamselection>1</streamselection>
+  </subtitles>
+
+  <!-- =========================================================
+       VIDEO LIBRARY (hands-off upkeep, tidy metadata)
+       ========================================================= -->
+  <videolibrary>
+    <!-- Auto-clean after an update removes dead entries safely -->
+    <cleanonupdate>true</cleanonupdate>
+    <!-- Increase “recently added” lists -->
+    <recentlyaddeditems>50</recentlyaddeditems>
+    <!-- Use file timestamp as date added if no NFO (keeps order sane) -->
+    <dateadded>2</dateadded>
+    <!-- Aggressive stacking helps multi-part movies -->
+    <importresumepoints>true</importresumepoints>
+  </videolibrary>
+
+  <!-- =========================================================
+       MUSIC LIBRARY (if/when you use it)
+       ========================================================= -->
+  <musiclibrary>
+    <recentlyaddeditems>200</recentlyaddeditems>
+    <backgroundupdate>true</backgroundupdate>
+  </musiclibrary>
+
+  <!-- =========================================================
+       JSON-RPC / CONTROL (speed up integrations like Trakt scripts)
+       ========================================================= -->
+  <jsonrpc>
+    <!-- Slightly smaller/faster responses for local integrations -->
+    <compactoutput>true</compactoutput>
+  </jsonrpc>
+
+  <!-- =========================================================
+       VIDEO SCANNER (be tolerant when sources are flaky)
+       ========================================================= -->
+  <videoscanner>
+    <!-- Skip stubborn items instead of stalling full scans -->
+    <ignoreerrors>true</ignoreerrors>
+  </videoscanner>
+
+  <!-- =========================================================
+       PVR / EPG (safe defaults; ignore if you don’t use PVR)
+       ========================================================= -->
+  <epg>
+    <!-- Keep EPG DB from exploding on flaky sources -->
+    <updatefrequency>120</updatefrequency>
+    <pastdaystodisplay>2</pastdaystodisplay>
+    <futuredaystodisplay>7</futuredaystodisplay>
+  </epg>
+
+  <!-- =========================================================
+       SQLITE DB TUNING (safe, conservative)
+       ========================================================= -->
+  <sqlite>
+    <!-- WAL is default and best for Kodi; just in case a platform flips it -->
+    <journaling>WAL</journaling>
+    <!-- Keep SQLite flush behaviour conservative (reduce corruption risk) -->
+    <synchronous>1</synchronous>
+  </sqlite>
+
+  <!-- =========================================================
+       MISC QUALITY OF LIFE
+       ========================================================= -->
+  <pictures>
+    <!-- EXIF reading can be expensive on NAS albums; enable only if needed -->
+    <useexif>false</useexif>
+  </pictures>
+
+  <general>
+    <!-- Quicker exit behaviour if a source is gone -->
+    <enablenetworkfiles>false</enablenetworkfiles>
+  </general>
+
+</advancedsettings>

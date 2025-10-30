@@ -16,7 +16,7 @@ error() { echo "[oneclick][ERROR] $*" | tee -a "$LOGFILE" >&2; exit 1; }
 
 trap 'rc=$?; [ $rc -ne 0 ] && echo "[oneclick][ERROR] install.sh failed (rc=$rc). See $LOGFILE" | tee -a "$LOGFILE"' EXIT
 
-# --- helpers ---------------------------------------------------------------
+# ----------------------------- helpers --------------------------------------
 retry() {
   # retry <n> <sleep_seconds> <cmd...>
   local n=$1 s=$2; shift 2
@@ -29,8 +29,13 @@ retry() {
   return 1
 }
 
-ensure_dir() { mkdir -p "$1"; }
-normalize_sh() { sed -i 's/\r$//' "$1"; sed -i '1s|^#!.*|#!/usr/bin/env bash|' "$1"; chmod +x "$1"; }
+ensure_dirs() { for d in "$@"; do mkdir -p "$d"; done; }
+
+normalize_sh() {
+  sed -i 's/\r$//' "$1" 2>/dev/null || true
+  sed -i '1s|^#!.*|#!/usr/bin/env bash|' "$1" 2>/dev/null || true
+  chmod +x "$1" 2>/dev/null || true
+}
 
 stub_body() {
   cat <<'SH'
@@ -46,11 +51,11 @@ fetch_or_stub() {
   local rel="$1"
   local dst="$BASE_DIR/$rel"
   local url="$RAW_BASE/$rel"
-  ensure_dir "$(dirname "$dst")"
+  ensure_dirs "$(dirname "$dst")"
   if command -v curl >/dev/null 2>&1; then
     if curl -fsSL "$url" -o "$dst"; then
       log "Fetched $rel from repo"
-      normalize_sh "$dst" || true
+      normalize_sh "$dst"
       return 0
     fi
   fi
@@ -69,21 +74,19 @@ ensure_phase_exec() {
   fi
 }
 
-# --- bootstrap filesystem ---------------------------------------------------
-ensure_dir "$BASE_DIR" "$ASSETS" "$PHASES"
+# ------------------------- bootstrap FS & deps -------------------------------
+ensure_dirs "$BASE_DIR" "$ASSETS" "$PHASES"
 touch "$LOGFILE" || true
-
 log "Starting OneClick installer (self-healing)…"
 
-# --- Ensure unzip & latest rclone are present ------------------------------
+# unzip + CA certs (safe if already installed)
 if ! command -v unzip >/dev/null 2>&1; then
   log "Installing unzip and CA certificates..."
   retry 2 5 apt-get update -y || true
   retry 2 5 apt-get install -y unzip ca-certificates || true
 fi
 
-ensure_latest_rclone() { curl -fsSL https://rclone.org/install.sh | bash; }
-
+# rclone (install/upgrade to >= 1.68)
 if ! command -v rclone >/dev/null 2>&1; then
   log "rclone not found — installing…"
   retry 2 5 bash -c 'curl -fsSL https://rclone.org/install.sh | bash' || warn "rclone install script failed"
@@ -98,63 +101,68 @@ else
   fi
 fi
 
-# --- Make sure mediacenter (Kodi) can be controlled later ------------------
+# Make sure mediacenter (Kodi) can be controlled later
 if ! systemctl is-enabled mediacenter >/dev/null 2>&1; then
   log "Enabling mediacenter service…"
   systemctl enable mediacenter || true
 fi
 
-# --- Ensure all phases exist (fetch or stub) --------------------------------
-# Core phases we use:
+# --------------------- ensure phases exist (fetch or stub) -------------------
 for rel in \
   "phases/31_helpers.sh" \
   "phases/41_backup.sh" \
   "phases/42_addons.sh" \
   "phases/43_skin.sh" \
+  "phases/43_fonts.sh" \
   "phases/44_advanced.sh" \
-  "phases/21_pi_tune.sh" \
+  "phases/20_optimize.sh" \
   "phases/22_argon_one.sh"
 do
   ensure_phase_exec "$rel"
 done
 
-# Re-source helpers after normalization
 # shellcheck disable=SC1091
 . "$PHASES/31_helpers.sh" 2>/dev/null || true
 
-# --- Systemd daemon-reload just in case new units arrived -------------------
+# Systemd daemon-reload in case new units arrived
 systemctl daemon-reload || true
 
-# --- Run backup + maintenance setup ----------------------------------------
+# ---------------- backup + maintenance timers (if phase present) -------------
 if [ -x "$PHASES/41_backup.sh" ]; then
   log "Installing backup + maintenance timers…"
-  systemctl enable --now oneclick-maint.timer || warn "maint.timer enable failed"
+  systemctl enable --now oneclick-maint.timer  || warn "maint.timer enable failed"
   systemctl enable --now oneclick-backup.timer || warn "backup.timer enable failed"
 else
   warn "41_backup.sh not executable — skipping timers."
 fi
 
-# --- Optional: Pi performance tuning ---------------------------------------
-log "Running Raspberry Pi tuning (21_pi_tune.sh)…"
-bash "$PHASES/21_pi_tune.sh" || warn "Pi tuning returned non-zero"
+# ---------------- Pi performance tuning (20_optimize.sh) ---------------------
+log "Running Raspberry Pi tuning (20_optimize.sh)…"
+bash "$PHASES/20_optimize.sh" || warn "Pi tuning returned non-zero"
 
-# --- Argon One Pi4 V2 fan control setup ------------------------------------
+# ---------------- Argon One Pi4 V2 fan control setup ------------------------
 log "Running Argon One setup (22_argon_one.sh)…"
 bash "$PHASES/22_argon_one.sh" || warn "Argon setup returned non-zero"
 
-# --- Add-ons phase ----------------------------------------------------------
+# ---------------- Add-ons phase ---------------------------------------------
 log "Running add-on installation phase (42_addons.sh)…"
 bash "$PHASES/42_addons.sh" || warn "Add-ons phase returned non-zero"
 
-# --- Skin + fonts (Arctic Fuse 2 + EXO2) -----------------------------------
-log "Applying skin and fonts (43_skin.sh)…"
+# ---------------- Skin + fonts (Arctic Fuse 2 + EXO2) -----------------------
+log "Applying skin (43_skin.sh)…"
 bash "$PHASES/43_skin.sh" || warn "Skin phase returned non-zero"
 
-# --- Advanced settings (no cache overrides on Kodi 21) ----------------------
+log "Installing EXO2 fonts (43_fonts.sh)…"
+bash "$PHASES/43_fonts.sh" || warn "Fonts phase returned non-zero"
+
+# ---------------- Advanced settings (no cache overrides on Kodi 21) ----------
 log "Applying advancedsettings + GUI presets (44_advanced.sh)…"
 bash "$PHASES/44_advanced.sh" || warn "Advanced phase returned non-zero"
 
-# --- Finish up --------------------------------------------------------------
+# ---------------- Finish up --------------------------------------------------
+# Ownership nicety for Kodi profile files that phases may have touched
+chown -R osmc:osmc /home/osmc/.kodi 2>/dev/null || true
+
 log "OneClick install complete."
 echo "[oneclick][install] You can reboot or restart Kodi with: sudo systemctl restart mediacenter" | tee -a "$LOGFILE"
 exit 0

@@ -1,1 +1,6 @@
+[Unit]
+Description=OneClick daily health check
 
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '/usr/local/bin/oneclick-status | tee -a /var/log/oneclick-status.log'

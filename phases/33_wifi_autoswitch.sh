@@ -1,223 +1,242 @@
 #!/usr/bin/env bash
 # phases/33_wifi_autoswitch.sh
-# Wi-Fi autoswitcher (media-streaming friendly): prefers PREFERRED_SSIDS, avoids flapping,
-# warns if weak signal, switches only on meaningful improvement (≥5 dB by default).
+# Wi-Fi autoswitch for OSMC (ConnMan): prefer strongest of preferred SSIDs,
+# with streaming-friendly thresholds + optional Kodi notifications.
+#
+# Seeds /etc/default/wifi-autoswitch from assets/config if present.
+# Installs:
+#   - /usr/local/sbin/wifi-autoswitch (worker)
+#   - systemd service + timer (runs every 2 minutes)
 
 set -euo pipefail
 log(){ echo "[oneclick][33_wifi_autoswitch] $*"; }
-warn(){ echo "[oneclick][WARN] $*" >&2; }
+warn(){ echo "[oneclick][WARN] $*">&2; }
 
-# -------- Install default config (create only if missing) -------------------
+ASSETS_BASE="${ASSETS_BASE:-/opt/osmc-oneclick/assets}"
+ASSET_CFG="${ASSETS_BASE}/config/wifi-autoswitch"
 CONF="/etc/default/wifi-autoswitch"
-if [ ! -f "$CONF" ]; then
-  log "Writing default /etc/default/wifi-autoswitch"
-  install -d -m 0755 /etc/default
-  cat >"$CONF"<<'CFG'
-# /etc/default/wifi-autoswitch
-# OneClick default profile: optimised for media streaming stability.
+BIN="/usr/local/sbin/wifi-autoswitch"
+SVC="/etc/systemd/system/wifi-autoswitch.service"
+TMR="/etc/systemd/system/wifi-autoswitch.timer"
 
-# Wi-Fi interface
+ensure_dep() {
+  command -v connmanctl >/dev/null 2>&1 || {
+    warn "connmanctl not found. OSMC/ConnMan is required for Wi-Fi autoswitch."
+    exit 0
+  }
+  command -v bash >/dev/null 2>&1 || true
+  command -v sed >/dev/null 2>&1 || true
+  command -v awk >/dev/null 2>&1 || true
+}
+
+seed_default_conf() {
+  # 1) Prefer repo asset if present and no local file yet
+  if [[ ! -f "$CONF" && -f "$ASSET_CFG" ]]; then
+    log "Seeding ${CONF} from assets/config/wifi-autoswitch"
+    install -o root -g root -m 0644 "$ASSET_CFG" "$CONF"
+    return
+  fi
+
+  # 2) Otherwise, write a sensible default once
+  if [[ ! -f "$CONF" ]]; then
+    log "Creating default ${CONF} (streaming-friendly)"
+    cat >"$CONF"<<'CFG'
+# /etc/default/wifi-autoswitch
+# Default configuration for OneClick Wi-Fi autoswitcher (OSMC/ConnMan)
+# Optimised for media streaming performance.
+
+# --- Interface ---
 WIFI_IFACE="wlan0"
 
-# Streaming thresholds
-STREAM_RSSI_DBM=-68     # warn if current link worse (more negative)
-MIN_SIGNAL_PCT=55       # only used with ConnMan signal% if available
+# --- Streaming thresholds ---
+# ConnMan reports Strength 0..100; warn/switch if below this
+MIN_SIGNAL_PCT=55          # minimum acceptable strength
+WARN_SIGNAL_PCT=60         # show a warning toast if falls below
 
-# Scan cadence
-RUN_EVERY_SEC=120       # systemd timer period
+# --- Timer cadence ---
+RUN_EVERY_SEC=120          # controlled by systemd timer, documented here
 
-# Notifications
-KODI_NOTIFY=1
+# --- Notifications ---
+KODI_NOTIFY=1              # 1=enable Kodi toasts (requires kodi-send in PATH)
 
-# Preferred SSIDs (order = priority)
+# --- Preferred SSIDs (priority order) ---
+# Put your favourites first; autoswitch prefers strongest among these.
+# Unicode SSIDs are fine when quoted.
 PREFERRED_SSIDS=("Batcave" "🐢")
 
-# Switching behaviour
-AUTO_SWITCH=1           # 1 = switch to best preferred SSID when ≥5 dB better
-SWITCH_DELTA_DB=5       # minimum improvement to trigger a switch
-
+# --- Switching logic ---
+AUTO_SWITCH=1              # 1 = enable switching
+SWITCH_DELTA_DB=5          # minimum “better by” (in ConnMan Strength points)
 CFG
-fi
+    chmod 0644 "$CONF"
+  fi
+}
 
-# -------- Install autoswitch script ----------------------------------------
-BIN="/usr/local/sbin/wifi-autoswitch"
-install -d -m 0755 /usr/local/sbin
-cat >"$BIN"<<'SH'
+install_worker() {
+  log "Installing worker: ${BIN}"
+  cat >"$BIN"<<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load config
+# Load defaults
 CONF="/etc/default/wifi-autoswitch"
 [ -f "$CONF" ] && . "$CONF"
 
-# Defaults if not set
 WIFI_IFACE="${WIFI_IFACE:-wlan0}"
-STREAM_RSSI_DBM="${STREAM_RSSI_DBM:- -68}"
+MIN_SIGNAL_PCT="${MIN_SIGNAL_PCT:-55}"
+WARN_SIGNAL_PCT="${WARN_SIGNAL_PCT:-60}"
 RUN_EVERY_SEC="${RUN_EVERY_SEC:-120}"
 KODI_NOTIFY="${KODI_NOTIFY:-1}"
 AUTO_SWITCH="${AUTO_SWITCH:-1}"
 SWITCH_DELTA_DB="${SWITCH_DELTA_DB:-5}"
+# shellcheck disable=SC2207
+PREFERRED_SSIDS=(${PREFERRED_SSIDS:-"Batcave" "🐢"})
 
-# Simple Kodi toast
-toast(){
-  local heading="$1" msg="$2"
-  if [ "$KODI_NOTIFY" = "1" ] && command -v kodi-send >/dev/null 2>&1; then
-    kodi-send --action="Notification(${heading},${msg},6000)" >/dev/null 2>&1 || true
-  fi
+say(){ echo "[wifi-autoswitch] $*"; }
+
+toast() {
+  local title="$1" msg="$2" icon=""
+  command -v kodi-send >/dev/null 2>&1 || return 0
+  [ "${KODI_NOTIFY}" = "1" ] || return 0
+  kodi-send --action="Notification(${title},${msg},6000,${icon})" >/dev/null 2>&1 || true
 }
 
-# Current SSID/RSSI
-cur_ssid(){ iwgetid -r 2>/dev/null || true; }
-cur_rssi(){
-  local l
-  l="$(iw dev "$WIFI_IFACE" link 2>/dev/null | awk '/signal:/ {print $2}')" || true
-  echo "${l:-0}"
+# Parse current service id for Wi-Fi
+current_service_id() {
+  # service id looks like: wifi_XXXX_managed_psk or *_open
+  connmanctl services | awk '/^\*|^ /{print $NF" "$0}' | awk '/^wifi_/{print $1; exit}'
 }
 
-# ConnMan helpers (OSMC)
-cm_has(){ command -v connmanctl >/dev/null 2>&1; }
-cm_scan(){ connmanctl scan wifi >/dev/null 2>&1 || true; }
-cm_services(){ connmanctl services 2>/dev/null || true; }
-cm_connect(){
-  # $1 = SSID -> resolve service then connect
-  local ssid="$1" svc
-  svc="$(cm_services | awk -v s="$ssid" '$0 ~ s {print $NF; exit}')" || true
-  [ -n "$svc" ] && connmanctl connect "$svc" >/dev/null 2>&1
+current_strength_and_ssid() {
+  local sid="$1"
+  # Query full properties for the service id
+  connmanctl services "$sid" 2>/dev/null | awk '
+    /^ *Strength/ { s=$NF }
+    /^ *Name/     { sub(/^ *Name *= */, "", $0); name=$0 }
+    END { if (s=="") s=0; print s"|"name }
+  '
 }
 
-# NetworkManager / wpa_cli fallbacks
-nm_connect(){ nmcli dev wifi connect "$1" >/dev/null 2>&1; }
-wpa_connect(){
-  # $1 = SSID
-  local id
-  id="$(wpa_cli -i "$WIFI_IFACE" list_networks 2>/dev/null | awk -v s="$1" '$0 ~ s {print $1; exit}')" || true
-  [ -n "$id" ] || return 1
-  wpa_cli -i "$WIFI_IFACE" select_network "$id" >/dev/null 2>&1 || return 1
-  wpa_cli -i "$WIFI_IFACE" enable_network "$id" >/dev/null 2>&1 || true
-  wpa_cli -i "$WIFI_IFACE" save_config >/dev/null 2>&1 || true
+# Build list of all visible wifi services with details
+scan_services() {
+  connmanctl services 2>/dev/null | awk '/^ *wifi_/{print $NF}'
 }
 
-# Scan with iw (works everywhere)
-scan_iw(){
-  # prints: "<RSSI_DBM>\t<SSID>"
-  iw dev "$WIFI_IFACE" scan 2>/dev/null \
-    | awk '
-      /^BSS / {sig=""; ssid=""}
-      /signal:/ {sig=$2}
-      /^\\tSSID:/ { sub("^\\tSSID: ", "", $0); ssid=$0; if (ssid != "") print int(sig), ssid }
-    ' | sort -nr
-}
-
-# Choose best SSID (pref list first, then strongest)
-choose_best(){
-  # outputs "RSSI\tSSID"
-  local preferred=("${PREFERRED_SSIDS[@]}")
-  local lines="$(scan_iw)"
-
-  # filter to preferred (in preference order), pick strongest among each name
-  for p in "${preferred[@]}"; do
-    # strongest instance of this SSID
-    local row
-    row="$(printf '%s\n' "$lines" | awk -v s="$p" '$0 ~ "\\t" s"$" {print $0}' | sort -nr | head -n1)"
-    [ -n "$row" ] && echo "$row" && return 0
+# Is this SSID in our preferred list?
+is_preferred() {
+  local ssid="$1"
+  for p in "${PREFERRED_SSIDS[@]}"; do
+    [[ "$ssid" == "$p" ]] && return 0
   done
-
-  # fallback: strongest of anything we already know (visible in wpa_supplicant)
-  if command -v wpa_cli >/dev/null 2>&1; then
-    local known
-    while read -r _ id ssid _; do
-      [ -n "$ssid" ] || continue
-      local row
-      row="$(printf '%s\n' "$lines" | awk -v s="$ssid" '$0 ~ "\\t" s"$" {print $0}' | sort -nr | head -n1)"
-      [ -n "$row" ] && echo "$row" && return 0
-    done < <(wpa_cli -i "$WIFI_IFACE" list_networks 2>/dev/null | tail -n +3)
-  fi
-
-  # last resort: strongest from scan
-  printf '%s\n' "$lines" | head -n1
+  return 1
 }
 
-main(){
-  local curS curR bestR bestS delta
+# Switch to a given service id (assumes credentials already known/saved)
+switch_to() {
+  local sid="$1" ssid="$2" strength="$3"
+  say "Switching to ${ssid} (${strength}%) via ${sid}"
+  toast "Wi-Fi" "Switching to ${ssid} (${strength}%)"
+  connmanctl connect "$sid" >/dev/null 2>&1 || {
+    say "connmanctl connect failed for $sid"
+    return 1
+  }
+  return 0
+}
 
-  curS="$(cur_ssid)"
-  curR="$(cur_rssi)"     # e.g. -63
+main() {
+  # Get currently connected Wi-Fi service (if any)
+  local cur_id cur_info cur_strength cur_ssid
+  cur_id="$(current_service_id || true)"
 
-  # warn if weak for streaming
-  if [ -n "$curR" ] && [ "$curR" -lt 0 ] && [ "$curR" -lt "$STREAM_RSSI_DBM" ]; then
-    toast "Wi-Fi" "Weak signal on '${curS}' (${curR} dBm). Streaming may stutter."
-  fi
-
-  # scan + choose
-  local bestLine
-  bestLine="$(choose_best)"
-  bestR="$(echo "$bestLine" | awk "{print \$1}")"
-  bestS="$(echo "$bestLine" | cut -f2- )"
-
-  # nothing to do?
-  [ -z "$bestS" ] && exit 0
-
-  # already on best?
-  if [ "$bestS" = "$curS" ]; then
-    exit 0
-  fi
-
-  # Only switch if improvement is meaningful
-  if [ "$AUTO_SWITCH" = "1" ] && [ -n "$curR" ] && [ "$curR" -lt 0 ] && [ -n "$bestR" ]; then
-    delta=$(( bestR - curR ))   # e.g. -55 - (-70) = 15 (dB better)
-    if [ "$delta" -lt "$SWITCH_DELTA_DB" ]; then
-      # not a big enough win; stay put
-      exit 0
+  if [ -n "$cur_id" ]; then
+    cur_info="$(current_strength_and_ssid "$cur_id")"
+    cur_strength="${cur_info%%|*}"
+    cur_ssid="${cur_info#*|}"
+    [[ -z "$cur_strength" ]] && cur_strength=0
+    say "Current: ${cur_ssid:-unknown} (${cur_strength}%)"
+    if (( cur_strength < WARN_SIGNAL_PCT )); then
+      toast "Wi-Fi" "Weak signal on ${cur_ssid:-?}: ${cur_strength}%"
     fi
   else
-    # not auto-switching; just warn
+    cur_strength=0
+    cur_ssid=""
+    say "Not currently connected via ConnMan Wi-Fi"
+  fi
+
+  # Scan visible Wi-Fi services and pick best preferred SSID by Strength
+  local best_id="" best_ssid="" best_strength=-1
+  while IFS= read -r sid; do
+    [ -z "$sid" ] && continue
+    info="$(current_strength_and_ssid "$sid")"
+    s="${info%%|*}"
+    n="${info#*|}"
+    [ -z "$s" ] && s=0
+
+    # Consider only preferred SSIDs
+    if is_preferred "$n"; then
+      if (( s > best_strength )); then
+        best_strength="$s"
+        best_ssid="$n"
+        best_id="$sid"
+      fi
+    fi
+  done < <(scan_services)
+
+  if [ -z "$best_id" ]; then
+    say "No preferred SSIDs visible; doing nothing."
     exit 0
   fi
 
-  # Try to connect (ConnMan -> NM -> wpa_cli)
-  if cm_has; then
-    cm_scan
-    cm_connect "$bestS" || true
-  elif command -v nmcli >/dev/null 2>&1; then
-    nm_connect "$bestS" || true
-  else
-    wpa_connect "$bestS" || true
+  say "Best preferred visible: ${best_ssid} (${best_strength}%)"
+
+  # Decide whether to switch
+  if [ -n "$cur_ssid" ] && [ "$cur_ssid" = "$best_ssid" ]; then
+    # Already on the best preferred SSID
+    say "Already on ${cur_ssid}; nothing to do."
+    exit 0
   fi
 
-  sleep 2
-  local newS="$(cur_ssid)"
-  if [ "$newS" = "$bestS" ]; then
-    toast "Wi-Fi" "Switched to '${bestS}' (${bestR} dBm)"
+  # If we’re on a different SSID:
+  if (( AUTO_SWITCH )); then
+    # Switch if improvement exceeds threshold OR current is below minimum
+    if (( best_strength + 0 >= cur_strength + SWITCH_DELTA_DB )) || (( cur_strength < MIN_SIGNAL_PCT )); then
+      switch_to "$best_id" "$best_ssid" "$best_strength" || exit 0
+    else
+      say "Staying on ${cur_ssid} (Δ=${best_strength-cur_strength} < ${SWITCH_DELTA_DB})"
+    fi
   fi
 }
 
 main "$@"
 SH
-chmod +x "$BIN"
+  chmod 0755 "$BIN"
+}
 
-# -------- systemd unit + timer ---------------------------------------------
-install -d -m 0755 /etc/systemd/system
-
-cat >/etc/systemd/system/wifi-autoswitch.service <<'UNIT'
+install_units() {
+  log "Writing systemd units"
+  cat >"$SVC"<<UNIT
 [Unit]
-Description=Wi-Fi autoswitch (streaming-friendly)
-After=network-online.target
+Description=Wi-Fi autoswitch (ConnMan) for streaming
+After=network-online.target connman.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/wifi-autoswitch
+ExecStart=$BIN
 Nice=10
-IOSchedulingClass=best-effort
+
+[Install]
+WantedBy=multi-user.target
 UNIT
 
-cat >/etc/systemd/system/wifi-autoswitch.timer <<'UNIT'
+  cat >"$TMR"<<UNIT
 [Unit]
 Description=Run Wi-Fi autoswitch periodically
 
 [Timer]
-OnBootSec=2min
+OnBootSec=30s
 OnUnitActiveSec=2min
+Unit=wifi-autoswitch.service
 Persistent=true
 RandomizedDelaySec=15s
 
@@ -225,9 +244,13 @@ RandomizedDelaySec=15s
 WantedBy=timers.target
 UNIT
 
-# -------- Enable timer ------------------------------------------------------
-systemctl daemon-reload
-systemctl enable --now wifi-autoswitch.timer
+  systemctl daemon-reload
+  systemctl enable --now wifi-autoswitch.timer
+}
 
-log "Installed: /etc/default/wifi-autoswitch (create-once), /usr/local/sbin/wifi-autoswitch, systemd timer."
-log "Edit SSIDs in /etc/default/wifi-autoswitch if needed; timer runs every 2 min."
+# ----- run -----
+ensure_dep
+seed_default_conf
+install_worker
+install_units
+log "Wi-Fi autoswitch installed and timer enabled (every 2 min)."

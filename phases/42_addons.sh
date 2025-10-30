@@ -1,158 +1,120 @@
 #!/usr/bin/env bash
-#
-# 42_addons.sh — Install Kodi repositories & add-ons the clean way.
-# - Installs repos first (so updates are automatic)
-# - Installs add-ons via Kodi’s add-on manager (InstallAddon)
-# - Skips if already installed
-# - Emits friendly logs + Kodi toasts
-#
-# Requirements: kodi-send available, Kodi running
-# Tip: Fill in ZIP URLs below for any third-party repos so the
-#      script can bootstrap them if Kodi can’t find the repo by ID.
-
 set -euo pipefail
 
-KODI_SEND_BIN="${KODI_SEND_BIN:-/usr/bin/kodi-send}"
-KODI_TOAST_ICON="${KODI_TOAST_ICON:-/home/osmc/.kodi/media/notify/icons/globe_shield.png}"
-SLEEP_AFTER_INSTALL="${SLEEP_AFTER_INSTALL:-2}"
+# Requires: kodi-send available and Kodi running (OSMC service usually is).
+# This phase:
+#  - Fetches latest repository ZIPs for Umbrella, Nixgates (Seren), A4KSubtitles, Otaku (Hooty), CoCo Scrapers
+#  - Installs each repo ZIP via Kodi
+#  - Installs key add-ons from those repos: Umbrella, Seren, Trakt, Otaku, CoCo Scrapers, A4KSubtitles, Artwork Dump
+#  - Applies BBviking Seren update ZIP after Seren
 
-log()  { echo "[addons] $*"; }
-ok()   { echo -e "  \xE2\x9C\x85 $*"; }   # ✓
-warn() { echo -e "  \xE2\x9A\xA0 $*"; }   # ⚠
-err()  { echo -e "  \xE2\x9D\x8C $*"; }   # ❌
+KODI_BIN="$(command -v kodi-send || true)"
+if [[ -z "${KODI_BIN}" ]]; then
+  echo "[addons] kodi-send not found; aborting."
+  exit 1
+fi
 
-toast() {
-  local title="$1" msg="$2"
-  $KODI_SEND_BIN --action="Notification(${title},${msg},5000,${KODI_TOAST_ICON})" >/dev/null 2>&1 || true
+WORK=/tmp/kodi-repos
+mkdir -p "$WORK"
+
+kodi_install_zip() {
+  local zip="$1"
+  echo "[addons] Installing ZIP in Kodi: $zip"
+  "$KODI_BIN" --action="InstallFromZip($zip)" >/dev/null
+  # Let Kodi process
+  sleep 4
 }
 
-need_kodi() {
-  if ! command -v "$KODI_SEND_BIN" >/dev/null 2>&1; then
-    err "kodi-send not found. Is Kodi installed?"
-    exit 1
-  fi
-}
-
-# --- Repo bootstrap map -------------------------------------------------------
-# If InstallAddon(repository.*) fails (e.g., Kodi doesn’t yet know the repo),
-# we’ll try to install the repo FROM ZIP using these URLs.
-# Fill the right-hand sides with the official HTTPS ZIPs for your setup.
-declare -A REPO_ZIPS=(
-  # ["repository.umbrella"]="https://example.com/repository.umbrella-x.y.z.zip"
-  # ["repository.nixgates"]="https://example.com/repository.nixgates-x.y.z.zip"
-  # ["repository.a4ksubtitles"]="https://example.com/repository.a4ksubtitles-x.y.z.zip"
-  # ["repository.otaku"]="https://example.com/repository.otaku-x.y.z.zip"
-  # ["repository.cocoscrapers"]="https://example.com/repository.cocoscrapers-x.y.z.zip"
-)
-
-# --- What to install ----------------------------------------------------------
-# 1) Repositories (IDs)
-REPOS=(
-  "repository.umbrella"       # Umbrella
-  "repository.nixgates"       # Seren
-  "repository.a4ksubtitles"   # A4KSubtitles
-  "repository.otaku"          # Otaku
-  "repository.cocoscrapers"   # CoCo scrapers
-  # Add others here…
-)
-
-# 2) Add-ons (IDs)
-ADDONS=(
-  "plugin.video.umbrella"
-  "plugin.video.seren"
-  "script.trakt"                  # (sometimes service.trakt on older builds)
-  "plugin.video.otaku"
-  "script.artwork.dump"
-  "service.subtitles.a4ksubtitles"
-  "script.module.cocoscrapers"    # or plugin/video if that’s how it’s packaged
-  # Argon V2 case fan add-on — set the correct ID below once you confirm it:
-  # "service.argonv2.fan"         # TODO: replace with actual ID
-  # OptiKlean (verify exact ID):
-  # "service.optiklean"           # TODO: replace with actual ID
-)
-
-# --- Helpers ------------------------------------------------------------------
-
-# Ask Kodi if an addon is installed via a builtin condition
-has_addon() {
+kodi_install_addon() {
   local addon_id="$1"
-  # We can use a quick JSONRPC ping by trying to run a no-op Settings action; simplest is to try installing and rely on ZX.
-  # Instead, we’ll ask Kodi to echo a boolean by writing to the log via Notification (lightweight approach):
-  # Practical approach: rely on InstallAddon being idempotent and check again afterward.
-  # To keep it simple, we’ll treat install as idempotent and only sleep afterward.
-  return 1
+  echo "[addons] Installing add-on: $addon_id"
+  "$KODI_BIN" --action="InstallAddon($addon_id)" >/dev/null || true
+  sleep 2
 }
 
-install_by_id() {
-  local addon_id="$1"
-  $KODI_SEND_BIN --action="InstallAddon(${addon_id})" >/dev/null 2>&1 || return 1
-  sleep "$SLEEP_AFTER_INSTALL"
-  return 0
-}
+fetch_latest_zip() {
+  # Scrape an index page for a repository zip pattern and return a local path to the downloaded file
+  local base_url="$1" pattern="$2" out_name="$3"
+  local page tmpzip
+  page="$(mktemp)"
+  curl -fsSL "$base_url" -o "$page"
 
-install_repo_zip() {
-  local addon_id="$1" zip_url="$2"
-  if [[ -z "$zip_url" ]]; then
+  # Find the first matching zip (prefer highest-looking version if multiple appear)
+  local rel
+  rel="$(grep -Eo "${pattern}" "$page" | sort -Vr | head -n1 || true)"
+  if [[ -z "$rel" ]]; then
+    echo "[addons] ERROR: could not find zip by pattern '$pattern' at $base_url" >&2
+    rm -f "$page"
     return 1
   fi
-  # Download to Kodi’s packages dir so Kodi can pick it up
-  local pkg_dir="/home/osmc/.kodi/addons/packages"
-  mkdir -p "$pkg_dir"
-  local zip_path="${pkg_dir}/$(basename "$zip_url")"
-  log "Downloading ZIP for ${addon_id} …"
-  if ! curl -fsSL -o "$zip_path" "$zip_url"; then
-    return 1
+
+  # If rel is a relative path, build absolute
+  if [[ "$rel" != http* ]]; then
+    # strip leading './' or '/' if present
+    rel="${rel#./}"
+    rel="${rel#/}"
+    rel="${base_url%/}/$rel"
   fi
-  log "Trigger Kodi to Install from ZIP …"
-  # Kodi has a GUI action for “Install from zip file” but no direct action name.
-  # However, Kodi watches the packages dir and is able to install repo zips when asked by InstallAddon on newer versions.
-  # Fallback: open the file via RunAddon with file path (works on modern Kodi):
-  $KODI_SEND_BIN --action="InstallAddon(${zip_path})" >/dev/null 2>&1 || true
-  sleep "$SLEEP_AFTER_INSTALL"
-  return 0
+
+  tmpzip="$WORK/$out_name"
+  echo "[addons] Downloading: $rel"
+  curl -fsSL "$rel" -o "$tmpzip"
+  rm -f "$page"
+  echo "$tmpzip"
 }
 
-ensure_repo() {
-  local repo_id="$1"
-  log "Repo: ${repo_id}"
-  toast "Add-ons" "Installing repository: ${repo_id}"
-  if install_by_id "$repo_id"; then
-    ok "Installed (or already present): ${repo_id}"
-    return 0
-  fi
-  warn "InstallAddon(${repo_id}) didn’t succeed directly; trying ZIP bootstrap…"
-  if install_repo_zip "$repo_id" "${REPO_ZIPS[$repo_id]:-}"; then
-    ok "Bootstrapped ${repo_id} from ZIP."
-    return 0
-  fi
-  err "Failed to install repository: ${repo_id}. Provide a ZIP URL in REPO_ZIPS."
-  return 1
-}
+# 1) Umbrella repo (https://umbrellaplug.github.io/)
+UMBRELLA_ZIP="$(fetch_latest_zip "https://umbrellaplug.github.io/" 'repository\.umbrella-[0-9.]+\.zip' "repository.umbrella.zip")"
+kodi_install_zip "$UMBRELLA_ZIP"
 
-ensure_addon() {
-  local addon_id="$1"
-  log "Addon: ${addon_id}"
-  toast "Add-ons" "Installing: ${addon_id}"
-  if install_by_id "$addon_id"; then
-    ok "Installed (or already present): ${addon_id}"
-    return 0
-  fi
-  err "Failed to install add-on: ${addon_id}"
-  return 1
-}
+# 2) Nixgates repo (Seren) (https://nixgates.github.io/packages/)
+NIX_ZIP="$(fetch_latest_zip "https://nixgates.github.io/packages/" 'repository\.nixgates-[0-9.]+\.zip' "repository.nixgates.zip")"
+kodi_install_zip "$NIX_ZIP"
 
-# --- Run ----------------------------------------------------------------------
+# 3) A4KSubtitles repo (https://a4k-openproject.github.io/a4kSubtitles/packages/)
+A4K_ZIP="$(fetch_latest_zip "https://a4k-openproject.github.io/a4kSubtitles/packages/" 'a4kSubtitles[-_]repository[^"]*\.zip' "a4kSubtitles-repository.zip")"
+kodi_install_zip "$A4K_ZIP"
 
-need_kodi
-log "Starting repository installation…"
-for repo in "${REPOS[@]}"; do
-  ensure_repo "$repo" || true
-done
+# 4) Otaku (Hooty) repo (https://goldenfreddy0703.github.io/repository.hooty/)
+# This one typically exposes a stable filename "repository.hooty.zip"
+HOOTY_ZIP="$(fetch_latest_zip "https://goldenfreddy0703.github.io/repository.hooty/" 'repository\.hooty[^"]*\.zip' "repository.hooty.zip")"
+kodi_install_zip "$HOOTY_ZIP"
 
-log "Starting add-on installation…"
-for a in "${ADDONS[@]}"; do
-  ensure_addon "$a" || true
-done
+# 5) CoCo Scrapers repo (https://cocojoe2411.github.io/)
+COCO_ZIP="$(fetch_latest_zip "https://cocojoe2411.github.io/" 'repository\.cocoscrapers-[0-9.]+\.zip' "repository.cocoscrapers.zip")"
+kodi_install_zip "$COCO_ZIP"
 
-toast "Add-ons" "Repositories & add-ons processed. Check Add-on Browser for status."
-ok "All done."
+# --- Install add-ons from repos ---
+# Umbrella
+kodi_install_addon "plugin.video.umbrella"
+
+# Seren (from Nixgates)
+kodi_install_addon "plugin.video.seren"
+
+# Trakt (official repo ID)
+kodi_install_addon "script.trakt"
+
+# Otaku
+kodi_install_addon "plugin.video.otaku"
+
+# CoCo Scrapers core (module IDs vary; try both common ids)
+kodi_install_addon "script.module.cocoscrapers" || true
+kodi_install_addon "script.module.cocoscrapers.lite" || true
+
+# A4KSubtitles
+kodi_install_addon "service.subtitles.a4ksubtitles"
+
+# Artwork Dump
+kodi_install_addon "script.artwork.dump"
+
+# --- BBviking Seren update (overlays as a direct plugin zip) ---
+# Source: https://bbviking.github.io/  (direct plugin zip published there)
+BB_PAGE="https://bbviking.github.io/"
+BB_ZIP="$(fetch_latest_zip "$BB_PAGE" 'plugin\.video\.seren\.[0-9.]+\.zip' "plugin.video.seren-bbviking.zip")"
+if [[ -n "$BB_ZIP" ]]; then
+  kodi_install_zip "$BB_ZIP"
+else
+  echo "[addons] BBviking Seren zip not found; skipping."
+fi
+
+echo "[addons] Repositories and add-ons install phase complete."

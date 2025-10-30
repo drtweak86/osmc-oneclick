@@ -73,6 +73,27 @@ else
   warn "[addons] kodi-send not found; skipping Trakt OAuth trigger"
 fi
 
+# --- Switch Kodi to Arctic Fuse 2 (or Horizon 2) ---
+PREFERRED_SKIN="skin.arctic.fuse.2"   # or: skin.arctic.horizon.2
+
+if [[ -x "$KODI_SEND" ]]; then
+  # Make sure Kodi is up so JSON-RPC works
+  if ! systemctl is-active --quiet mediacenter; then
+    log "[addons] Kodi not running — starting mediacenter to switch skin"
+    systemctl start mediacenter
+    sleep 15
+  fi
+
+  # Install + enable chosen skin (safe if already installed)
+  sudo -u osmc "$KODI_SEND" -a "InstallAddon(${PREFERRED_SKIN})" || true
+  sudo -u osmc "$KODI_SEND" -a "EnableAddon(${PREFERRED_SKIN})" || true
+
+  # Ask Kodi to switch skin (user will see the 'Keep this skin?' prompt on screen)
+  sudo -u osmc "$KODI_SEND" -a "SetProperty(lookandfeel.skin,${PREFERRED_SKIN},10025)" || true
+  sudo -u osmc "$KODI_SEND" -a "Notification(Skin,Switching to Arctic…,8000)" || true
+else
+  warn "[addons] kodi-send not found; skipping skin switch"
+fi
 # --- Seren BBviking update (zip, installed AFTER Seren) ---
 # The site hosts a zip; we’ll fetch the most recent zip on the page and feed it to “Install from zip”.
 BBV_PAGE="https://bbviking.github.io/"

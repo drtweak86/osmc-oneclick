@@ -61,7 +61,10 @@ if [ -n "$cc" ] && [ -n "$dl" ] && [ -n "$sc" ] && [ "$dl" != "0" ]; then
   toast_vpn_once "$cc" "$pct" "$dl_int"; 
 fi 
 # --- end toast block ---
-  toast_vpn_once "${best_name^^}" "${score_pct}" "${dl_mbps}"
+: "${best_name:=${current_name:-UNKNOWN}}"
+: "${score_pct:=0}"
+: "${dl_mbps:=0}"
+toast_vpn_once "${best_name^^}" "${score_pct}" "${dl_mbps}"
   fi
   _log "$msg"
 }

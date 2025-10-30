@@ -1,56 +1,86 @@
 #!/usr/bin/env bash
-# install.sh — one-shot installer for OSMC OneClick
-# - Installs prerequisites (curl, unzip, jq, certs)
-# - Ensures latest rclone
-# - Runs add-ons + skin/fonts phases
-# - Enables backup timer if unit files are present
+# OneClick full installer for OSMC / Kodi 21 (Omega)
+# Handles dependency setup, Google Drive backup phase, add-ons, skin, and advanced settings.
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="/opt/osmc-oneclick"
+ASSETS="$BASE_DIR/assets"
+PHASES="$BASE_DIR/phases"
+LOGFILE="/var/log/osmc-oneclick-install.log"
 
-require_root() {
-  if [[ ${EUID:-0} -ne 0 ]]; then
-    echo "[oneclick][install] Please run with sudo/root."
-    exit 1
-  fi
+log()   { echo "[oneclick][install] $*" | tee -a "$LOGFILE"; }
+warn()  { echo "[oneclick][WARN] $*" | tee -a "$LOGFILE" >&2; }
+error() { echo "[oneclick][ERROR] $*" | tee -a "$LOGFILE" >&2; exit 1; }
+
+log "Starting OneClick installer..."
+
+# --- Ensure unzip & latest rclone are present ---
+if ! command -v unzip >/dev/null 2>&1; then
+  log "Installing unzip and CA certificates..."
+  apt-get update -y || true
+  apt-get install -y unzip ca-certificates || true
+fi
+
+ensure_latest_rclone() {
+  curl -fsSL https://rclone.org/install.sh | bash
 }
 
-log() { echo "[oneclick][install] $*"; }
-
-require_root
-
-log "Installing prerequisites (curl, unzip, jq, ca-certificates)…"
-apt-get update -y || true
-apt-get install -y curl unzip jq ca-certificates || true
-
-log "Ensuring latest rclone…"
-# Safe to re-run; script handles upgrade-in-place
-curl -fsSL https://rclone.org/install.sh | bash
-
-log "Marking phase scripts executable…"
-chmod +x "$REPO_DIR"/phases/*.sh || true
-
-# ---- Run phases ----
-if [[ -x "$REPO_DIR/phases/42_addons.sh" ]]; then
-  log "Running add-ons phase (42)…"
-  bash "$REPO_DIR/phases/42_addons.sh"
+if ! command -v rclone >/dev/null 2>&1; then
+  log "rclone not found — installing..."
+  ensure_latest_rclone
 else
-  log "WARN: phases/42_addons.sh not found or not executable — skipping."
+  need_ver="1.68"
+  have_ver="$(rclone version 2>/dev/null | sed -n 's/^rclone v\([0-9.]\+\).*/\1/p')"
+  if [ -n "$have_ver" ]; then
+    if [ "$(printf '%s\n' "$need_ver" "$have_ver" | sort -V | head -n1)" = "$have_ver" ] && [ "$have_ver" != "$need_ver" ]; then
+      log "rclone $have_ver < $need_ver — upgrading..."
+      ensure_latest_rclone
+    else
+      log "rclone $have_ver OK (>= $need_ver)"
+    fi
+  else
+    log "rclone version unknown — upgrading..."
+    ensure_latest_rclone
+  fi
 fi
 
-if [[ -x "$REPO_DIR/phases/43_fonts.sh" ]]; then
-  log "Running fonts phase (43)…"
-  bash "$REPO_DIR/phases/43_fonts.sh"
-else
-  log "WARN: phases/43_fonts.sh not found or not executable — skipping."
-fi
-
-# ---- Enable timers/services if present ----
-if systemctl list-unit-files | grep -q '^oneclick-backup.service'; then
-  log "Reloading systemd units and enabling backup timer…"
-  systemctl daemon-reload
+# --- Run backup + maintenance setup ---
+if [ -x "$PHASES/41_backup.sh" ]; then
+  log "Installing backup + maintenance timers..."
+  systemctl enable --now oneclick-maint.timer || true
   systemctl enable --now oneclick-backup.timer || true
+else
+  warn "41_backup.sh not found or not executable — skipping timers."
 fi
 
-log "Install complete. Trakt popup will appear in Kodi; follow the on-screen code to link your account."
+# --- Add-ons phase ---
+if [ -x "$PHASES/42_addons.sh" ]; then
+  log "Running add-on installation phase..."
+  bash "$PHASES/42_addons.sh"
+else
+  warn "42_addons.sh missing — skipping add-ons."
+fi
+
+# --- Apply Arctic Fuse 2 skin and fonts ---
+log "Installing Arctic Fuse 2 skin and fonts..."
+sudo -u osmc mkdir -p /home/osmc/.kodi/addons/skin.arctic.fuse.2/fonts
+sudo cp -r "$ASSETS/skin.arctic.fuse.2" /home/osmc/.kodi/addons/
+sudo cp "$ASSETS/fonts/"*.ttf /home/osmc/.kodi/addons/skin.arctic.fuse.2/fonts/
+sudo cp "$ASSETS/skin.arctic.fuse.2/1080i/Font.xml" /home/osmc/.kodi/addons/skin.arctic.fuse.2/1080i/
+sudo chown -R osmc:osmc /home/osmc/.kodi/addons/skin.arctic.fuse.2
+
+# --- Apply advancedsettings.xml ---
+if [ -f "$ASSETS/config/advancedsettings.xml" ]; then
+  log "Installing advancedsettings.xml"
+  sudo -u osmc mkdir -p /home/osmc/.kodi/userdata
+  sudo cp "$ASSETS/config/advancedsettings.xml" /home/osmc/.kodi/userdata/advancedsettings.xml
+  sudo chown osmc:osmc /home/osmc/.kodi/userdata/advancedsettings.xml
+else
+  warn "advancedsettings.xml not found in assets/config — skipping."
+fi
+
+# --- Final cleanup & confirmation ---
+log "Installation complete!"
+sudo -u osmc /usr/bin/kodi-send -a "Notification(Setup Complete,OneClick Installer finished successfully,8000)" || true
+exit 0

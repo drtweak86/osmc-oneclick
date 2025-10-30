@@ -1,0 +1,23 @@
+# assets/config/wifi-autoswitch
+# Default configuration for OneClick Wi-Fi autoswitcher
+# Optimised for media streaming performance.
+
+# --- Interface ---
+WIFI_IFACE="wlan0"
+
+# --- Streaming thresholds ---
+STREAM_RSSI_DBM=-68     # warn if link weaker (more negative)
+MIN_SIGNAL_PCT=55       # ConnMan % equivalent
+
+# --- Timer interval (seconds) ---
+RUN_EVERY_SEC=120
+
+# --- Kodi toast notifications ---
+KODI_NOTIFY=1
+
+# --- Preferred networks (in priority order) ---
+PREFERRED_SSIDS=("Batcave" "🐢")
+
+# --- Switching logic ---
+AUTO_SWITCH=1           # 1 = enable autoswitching
+SWITCH_DELTA_DB=5       # minimum improvement (in dB) to switch

@@ -50,6 +50,27 @@ for addon in "${ADDONS[@]}"; do
   install_addon "$addon" || warn "[addons] Install returned non-zero for $addon (might already be installed)."
 done
 
+# --- Trakt: enable + trigger OAuth popup ---
+KODI_SEND="/usr/bin/kodi-send"
+
+if [[ -x "$KODI_SEND" ]]; then
+  # Ensure Kodi is running so JSON-RPC works
+  if ! systemctl is-active --quiet mediacenter; then
+    log "[addons] Kodi not running — starting mediacenter to finish Trakt auth"
+    systemctl start mediacenter
+    sleep 15
+  fi
+
+  log "[addons] Enabling Trakt and triggering OAuth"
+  sudo -u osmc "$KODI_SEND" -a "InstallAddon(script.trakt)" || true
+  sudo -u osmc "$KODI_SEND" -a "EnableAddon(script.trakt)" || true
+  # Running the add-on opens the 'go to trakt.tv/activate' code prompt
+  sudo -u osmc "$KODI_SEND" -a "RunScript(script.trakt)" || true
+  sudo -u osmc "$KODI_SEND" -a "Notification(Setup,Trakt installed — follow on-screen code to link,8000)" || true
+else
+  warn "[addons] kodi-send not found; skipping Trakt OAuth trigger"
+fi
+
 # --- Seren BBviking update (zip, installed AFTER Seren) ---
 # The site hosts a zip; we’ll fetch the most recent zip on the page and feed it to “Install from zip”.
 BBV_PAGE="https://bbviking.github.io/"

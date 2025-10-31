@@ -1,0 +1,11 @@
+[Unit]
+Description=Xtreme First Boot (Stage 1 - Wizard Gate)
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/osmc-oneclick/scripts/oneclick-stage1.sh
+
+[Install]
+WantedBy=multi-user.target

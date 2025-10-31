@@ -1,0 +1,14 @@
+[Unit]
+Description=Xtreme First Boot (Stage 2 - Configure & Optimise)
+After=network-online.target
+Wants=network-online.target
+# Only run if stage1 has already shown the gate and we haven't finished
+ConditionPathExists=/var/lib/oneclick/wizard-gate.shown
+ConditionPathExists=!/var/lib/oneclick/done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/osmc-oneclick/scripts/oneclick-stage2.sh
+
+[Install]
+WantedBy=multi-user.target

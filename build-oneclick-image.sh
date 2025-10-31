@@ -20,7 +20,8 @@ set -euo pipefail
 # ----------------------------- Config ----------------------------------------
 BASE_IMG="${1:-XBian_Latest_arm64_rpi5.img}"
 OUT_IMG="${2:-xbian-oneclick.img}"
-LOCAL_DIR="${LOCAL_DIR:-}"  # if non-empty and files exist locally, use them
+# If not provided, default to the current repo on the build machine
+LOCAL_DIR="${LOCAL_DIR:-$PWD}"
 
 RAW_BASE="https://raw.githubusercontent.com/drtweak86/osmc-oneclick/main"
 

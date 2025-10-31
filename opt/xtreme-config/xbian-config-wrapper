@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Prefer our overrides before stock XBian modules
+OVR="/opt/xtreme-config"
+BASE="${XBMCONFIGPATH:-/usr/local/include/xbian-config}"
+export XBMCONFIGPATH="$OVR:$BASE"
+exec /usr/local/sbin/xbian-config "$@"

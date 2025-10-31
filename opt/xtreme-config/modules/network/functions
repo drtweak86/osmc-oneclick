@@ -1,0 +1,640 @@
+#!/bin/bash
+
+#
+#Copyright 2012 - 2018 Hexagon, CurlyMo, mk01 & mkreisl <development@xbian.org>
+#
+#This file is part of XBian - XBMC on the Raspberry Pi.
+#
+#XBian is free software: you can redistribute it and/or modify it under the
+#terms of the GNU General Public License as published by the Free Software
+#Foundation, either version 3 of the License, or (at your option) any later
+#version.
+#
+#XBian is distributed in the hope that it will be useful, but WITHOUT ANY
+#WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+#FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+#details.
+#
+#You should have received a copy of the GNU General Public License along
+#with XBian. If not, see <http://www.gnu.org/licenses/>
+
+setAuto() {
+    case $1 in
+        eth?|wlan?|ra?)
+            grep -q "^auto.*lo" $IFACES_CONFIG || sed -i 's/^iface.*lo/auto lo\n&/' $IFACES_CONFIG
+            sed -i "/^auto /s/ $1 / /g;/^auto /s/ $1$//g;/^auto$/d" $IFACES_CONFIG
+            if grep -qw "^allow-hotplug.*$1" $IFACES_CONFIG; then
+                sed -i "s/^allow-hotplug.*$1\b/auto $1\n&/" $IFACES_CONFIG
+            elif grep -q "^iface.*$1\s" $IFACES_CONFIG; then
+                sed -i "s/^iface.*$1\s/auto $1\n&/" $IFACES_CONFIG
+            else
+                sed -i "1 i\auto $1" $IFACES_CONFIG
+            fi
+        ;;
+
+        *)
+        ;;
+    esac
+
+    return 0
+}
+
+resAuto() {
+    case $1 in
+        eth?|wlan?|ra?)
+            sed -i "/^auto /s/ $1 / /g;/^auto /s/ $1$//g;/^auto$/d" $IFACES_CONFIG
+        ;;
+
+        *)
+        ;;
+    esac
+
+    return 0
+}
+
+setInterfaceDisableFn() {
+    case $1 in
+        eth?|wlan?|ra?)
+            sed -i "s%^allow-hotplug.*$1\b%#allow-hotplug $1%" $IFACES_CONFIG
+            sed -i "s%^iface.*$1\b%#iface $1%" $IFACES_CONFIG
+            resAuto $1
+            pkill -f "(dhclient|wpa_supplicant|wpa_cli).*$1" &>/dev/null
+            ;;
+        *)
+            ;;
+    esac
+    ifdown $1 >&/dev/null; ifdown --force $1 >&/dev/null; ip link set dev $1 down >&/dev/null; ip a flush dev $1
+
+    return 0
+}
+
+fetchInterfaceData() {
+    # Interface already present, store it + any subsequent ifaces in an buffer
+    IFACETMP=$(grep -A100 "^iface $1 inet " $IFACES_CONFIG | sed '1d');
+
+    # Remove what's now in the buffer from the file
+    sed -i "/^iface $1 inet /,+100d" $IFACES_CONFIG
+
+    # Extract subsequent ifaces to a separate buffer
+    MORE=$(echo -e "$IFACETMP" | sed -n '/\(^allow-hotplug.*\|^iface.*\|^auto.*\)/,$p')
+    ME=$(echo -e "$IFACETMP" | sed '/\(^allow-hotplug.*\|^iface.*\|^auto.*\)/,$d')
+    [ -n "$ME" ] && ME="\n"$ME
+}
+
+# Gets wlan credentials from current $IFACES_CONFIG or
+# from file /etc/wpa_supplicant/wpa_supplicant.conf and stores
+# them into global variable WLANKEY and SSID
+# Arguments
+#  $1 Protection (WPA|WEP|Open)
+#  $2 ESSID (optional)
+# Return
+#  WLANKEY
+#  SSID (if argument $2 is omitted)
+function fetchWLANCredentialsFn() {
+
+    case $1 in
+        WPA)  local key="WPA" ;;
+        WEP)  local key="wep_key0" ;;
+        Open) local key="NoKeyReq" ;;
+    esac
+
+    WLANKEY=''
+    if [ -n "$2" ]; then
+        local oIFS=$IFS; IFS=$'\n'
+        for ix in $(listNetworkInterfacesFn); do
+            local nc=$(readNetworkConfigurationFn $ix)
+            local ssid=$(echo -e "$nc" | sed -ne 's/ssid[\ ]\(.*\)/\1/p')
+            [ x"$GUIMODE" != x1 ] && ssid="$(echo "$ssid" | base64 -d)"
+            if [ "$2" = "$ssid" ]; then
+                WLANKEY=$(echo -e "$nc" | sed -ne 's/key[\ ]\(.*\)/\1/p')
+                [ -n "$WLANKEY" ] && { IFS=$oIFS; return; }
+            fi
+        done
+        IFS=$oIFS
+    fi
+
+    WLANKEY=''
+    local nb=$(sed -e 's/^[ \t]*//;s/[ \t]*$//' -e 's/}$/}\n/g' /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null | sed -e '/./{H;$!d;}' -e "x;/$2[\"\\n]/!d;/$key/!d;")
+    if [ -n "$nb" ]; then
+        [ -z "$2" ] && { local ssid=$(echo "$nb" | grep -m1 ^ssid=); eval $ssid; SSID=$ssid; }
+        case $1 in
+            WPA) local psk=$(echo "$nb" | grep -m1 ^psk=); eval $psk; WLANKEY=$psk ;;
+            WEP) local wep_key0=$(echo "$nb" | grep -m1 ^wep_key0=); eval $wep_key0; WLANKEY=$wep_key0 ;;
+        esac
+    fi
+    [ x"$GUIMODE" != x1 ] && [ -n "$WLANKEY" ] && WLANKEY="$(echo "$WLANKEY" | base64 --wrap=0)"
+}
+
+# Set wlan credentials
+# Arguments
+#  $1 Interface name
+#  $2 Protection (WPA|WEP|Open)
+#  $3 ESSID
+#  $4 WLANKEY (Only needed for WPA and WEP)
+# Return
+#  1: Success
+#  0|2: Failure
+# Error codes
+#  -10: Invalid wireless protection
+setInterfaceWlanCredentials() {
+
+	# Check that supplied interface is valid
+	isValidInterfaceFn "$1"
+	if [ $? -eq 1 ]; then
+
+		# Create buffer for holding configuration
+		WLANBUFFER="\n    wireless-power off\n"
+		n=$(echo -en "$3" | sed 's%\\%\\\\%g' )
+		k=$(echo "$4" | sed 's%\\%\\\\%g' )
+		case $2 in
+			WEP)  WLANBUFFER+="    wireless-essid $n\n    nwireless-key $k" ;;
+			WPA)  WLANBUFFER+="    wpa-ssid $n\n    wpa-psk $k" ;;
+			Open) WLANBUFFER+="    wireless-mode managed\n    wireless-essid $n" ;;
+			*)    return 2 ;;
+		esac
+
+		IFACE="$(grep -w -m1 "^iface $1" $IFACES_CONFIG)"
+		if [ -n "$IFACE" ]; then
+
+			# Extract DHCP or Static
+			MODE=$(echo $IFACE | awk "/inet /"'{ print $4 }')
+
+			# Fill buffer ME and MORE from $IFACES_CONFIG
+			fetchInterfaceData $1; ME=$(echo -e "$ME" | sed '/\(.*wireless.*\|.*wpa.*\)/d')
+
+			# Re-add current interface withouth previous cruft and re-add subsequent interfaces
+	                echo -e "iface $1 inet $MODE$WLANBUFFER$ME\n\n$MORE" >> $IFACES_CONFIG
+
+		else
+			# Interface not present, add it to the end
+			echo -e "\nallow-hotplug $1\niface $1 inet dhcp$WLANBUFFER" >> $IFACES_CONFIG
+		fi
+		sed -i -n '/^$/N;/\n$/D;p' $IFACES_CONFIG
+		chmod 0600 $IFACES_CONFIG
+		return 1;
+	else
+		return 0;
+	fi
+}
+
+# Sets an interface to use dhcp
+# Arguments
+#  $1 Interface name
+setInterfaceDhcpFn() {
+	isValidInterfaceFn "$1"
+	if [ $? -eq 1 ]; then
+		# We have to save current configuration for later (restart interface needs this file for shutting down interface properly)
+		cp $IFACES_CONFIG /run/interfaces.xbian
+
+		sed -i "s/^#iface $1\b/iface $1/" $IFACES_CONFIG
+		sed -i "s/^#allow hotplug $1\b/allow hotplug $1/" $IFACES_CONFIG
+		if grep -qw "^iface $1" $IFACES_CONFIG; then
+
+			# Fill buffer ME and MORE from $IFACES_CONFIG
+			fetchInterfaceData $1; ME=$(echo -e "$ME" | sed '/\(.*address.*\|.*netmask.*\|.*gateway.*\)/d')
+
+			# Re-add current interface withouth previous cruft and re-add subsequent interfaces
+	                echo -e "iface $1 inet dhcp$ME\n\n$MORE" >> $IFACES_CONFIG
+
+		else
+			# Interface not present, add it to the end
+			echo -e "\nallow-hotplug $1\niface $1 inet dhcp" >> $IFACES_CONFIG
+
+		fi
+		sed -i "s%#allow-hotplug.*$1\b%allow-hotplug $1%" $IFACES_CONFIG
+		sed -i -n '/^$/N;/\n$/D;p' $IFACES_CONFIG
+		chmod 0600 $IFACES_CONFIG
+		return 1;
+	else
+		return 0;
+	fi
+}
+
+# Validate a given ip address
+# Arguments
+#  $1 IP
+#  $2 Netmask
+# Return
+#  1: Valid
+#  0: Invalid
+function checkValidIpNumberFn() {
+    [ "$(ipcalc -b $1/$2 | awk '/Address/{print $2}')" != "$1" ]
+}
+
+function checkIp() {
+    ipcalc -b $1 | grep -q "INVALID ADDRESS"
+}
+
+# Validate a given gateway address
+# Arguments
+#  $1 IP
+#  $2 Netmask
+#  $3 Gateway
+# Return
+#  1: Valid
+#  0: Invalid
+function checkValidGwFn() {
+    ip2dec() { # Convert an IPv4 IP number to its decimal equivalent
+        declare -i a b c d;
+        IFS=. read a b c d <<<"$1"; echo "$(((a<<24)+(b<<16)+(c<<8)+d))";
+    }
+    checkIp "$3" || {
+        local lo=$(ip2dec $(ipcalc -b $1/$2 | awk '/Network/{ sub("/.*","",$2); print $2 }'))
+        local hi=$(ip2dec $(ipcalc -b $1/$2 | awk '/Broadcast/{ print $2 }'))
+        local gw=$(ip2dec $3)
+        ! [ "$lo" -le "$gw" -a "$gw" -le "$hi" ]
+    }
+}
+
+
+# Validate a given netmask
+# Arguments
+#  $1 IP
+#  $2 Netmask
+# Return
+#  1: Valid
+#  0: Invalid
+function checkValidIpNetmaskFn() {
+    [ "$(ipcalc -b $1/$2 | awk '/Netmask/{print $2}')" != "$2" ]
+}
+
+# Sets an interface to use static ip
+# Arguments
+#  $1 Interface name
+#  $2 IP
+#  $3 Netmask
+#  $4 Gateway (optional)
+#  $5 DNS1 (optional)
+#  $6 DNS2 (optional)
+#  $7 Method static/manual/disable (optional)
+# Returns
+#  0: Failed
+#  1: Success
+# Error codes
+#  -3: Invalid interface
+#  -6: Invalid IP
+#  -7: Invalid netmask
+#  -8: Invalid Gateway
+#  -9: Invalid DNS
+setInterfaceStaticFn() {
+	isValidInterfaceFn "$1"
+	if [ $? -eq 1 ]; then
+
+		# Configuration buffer
+		BUFFERIFACES=""
+		BUFFERRESOLV=""
+		# Validate input & preparation of configuration buffers
+		checkValidIpNumberFn "$2" "$3"
+		if [ ! $? -eq 1 ]; then
+			return 6;
+		else
+			BUFFERIFACES+="\n    address $2"
+		fi
+		checkValidIpNetmaskFn "$2" "$3"
+		if [ ! $? -eq 1 ]; then
+			return 7;
+		else
+			BUFFERIFACES+="\n    netmask $3"
+		fi
+		if [ $# -gt 3 ] && [ -n "$4" ]; then
+			if [ "$4" != "None" ] && [ "$4" != "0.0.0.0" ]; then
+				checkValidGwFn "$2" "$3" "$4"
+				if [ ! $? -eq 1 ]; then
+					return 8;
+				else
+					BUFFERIFACES+="\n    gateway $4"
+				fi
+			fi
+		fi
+		if [ $# -gt 4 ] && [ ! -z "$5" ] && [ "$5" != "0.0.0.0" ] && [ "$5" != "None" ]; then
+			checkIp "$5"
+			if [ ! $? -eq 1 ]; then
+				return 9;
+			else
+				BUFFERRESOLV+="nameserver $5"
+			fi
+		fi
+		if [ $# -gt 5 ] && [ ! -z "$6" ] && [ "$6" != "0.0.0.0" ] && [ "$6" != "None" ]; then
+			checkIp "$6"
+			if [ ! $? -eq 1 ]; then
+				return 9;
+			else
+				BUFFERRESOLV+="\nnameserver $6"
+			fi
+		fi
+
+		method=static; hashed=''
+		if [ $# -gt 6 -a -n "$7" ]; then
+			case "$7" in
+				manual|disable)  method=$7; hashed='#';;
+			esac
+		fi
+
+		# We have to save current configuration for later (restart interface needs this file for shutting down interface properly)
+		cp $IFACES_CONFIG /run/interfaces.xbian
+
+		sed -i "s/^#iface $1\b/iface $1/" $IFACES_CONFIG
+		sed -i "s/^#allow hotplug $1\b/allow hotplug $1/" $IFACES_CONFIG
+		# Process $IFACES_CONFIG
+		if grep -q "^iface $1" $IFACES_CONFIG; then
+
+			# Fill buffer ME and MORE from $IFACES_CONFIG
+			fetchInterfaceData $1; ME=$(echo -e "$ME" | sed '/\(.*address.*\|.*netmask.*\|.*gateway.*\)/d')
+
+			if [ "$7" = disable ]; then
+				# Commenting out remaining iface settings could cause issues, so it's better to remove them
+				#ME=$(echo -e "$ME" | sed -e 's/^#*//' | sed ':a;N;$!ba;s/\n/\n#/g')
+				#BUFFERIFACES=$(echo -e "$BUFFERIFACES" | sed ':a;N;$!ba;s/\n/\n#/g')
+				ME=''; BUFFERIFACES=''
+			fi
+			# Re-add current interface withouth previous cruft and re-add subsequent interfaces
+	                echo -e "iface $1 inet $method$ME$BUFFERIFACES\n\n$MORE" >> $IFACES_CONFIG
+
+		elif [ "$7" != disable ]; then
+			# Interface not present, add it to the end
+			echo -e "\n${hashed}allow-hotplug $1\niface $1 inet $method$BUFFERIFACES" >> $IFACES_CONFIG
+
+		fi
+		sed -i "s%.*allow-hotplug.*$1%${hashed}allow-hotplug $1%" $IFACES_CONFIG
+		sed -i -n '/^$/N;/\n$/D;p' $IFACES_CONFIG
+		chmod 0600 $IFACES_CONFIG
+
+		if [ "$7" = disable ]; then
+			setInterfaceDisableFn $1
+		else
+			# Process /etc/resolv.conf
+			sed -i "/nameserver/d" /etc/resolv.conf
+			echo -e "$BUFFERRESOLV" >> /etc/resolv.conf
+		fi
+		return 1;
+	else
+		return 0;
+	fi
+}
+
+# List all available network interfaces
+# Echoes @return
+#  @1: Available interfaces
+#  @2: Error code
+# Returns
+#  1: Success
+#  0: Error
+function listNetworkInterfacesFn() {
+	gethide() {
+	        local h=''
+		for n in $(ip -4 a | awk '/^[0-9]*: (eth*|wlan*|ra*).*state/{ sub(":","",$2); print $2; }'); do
+			[ "$(ip -4 a show $n | awk '/^ *inet/{ sub("/.*","",$2); print $2; exit; }')" = "$1" ] && h="|"$n
+		done
+		echo $h
+	}
+	if [ -e /run/xc.nethide ]; then
+		. /run/xc.nethide
+	else
+		if findmnt -nt nfs,nfs4 / >/dev/null; then
+			hideDEV=$(gethide $(netstat -nt | grep -m1 $(findmnt -n / | awk '{ sub(".*,addr=",""); sub(",.*",""); print $0; }'):2049 | \
+				awk '{ split($4, a, ":"); print a[1]; }'))
+		elif iscsiadm -m session &>/dev/null; then
+			hideDEV=$(gethide $(netstat -nt | grep :$(iscsiadm -m session | awk '{ split($3, a, ":"); split(a[2], b, ","); print b[1]; }') | \
+				awk '{ split($4, a, ":"); print a[1]; }'))
+		else
+			hideDEV=''
+		fi
+		echo "hideDEV='$hideDEV'" > /run/xc.nethide
+	fi
+	IFACES=$(ip a | grep -vwE "lo|dummy[0-9]|tun[0-9]$hideDEV" | awk '/state/{ sub(":","",$2); print $2; }' | sort);
+	if [ ! -z "$IFACES" ]; then
+		echo -e "$IFACES"
+		return 1
+	else
+		return 0
+	fi
+}
+
+# Check if a given string is a valid interface name
+# Parameters
+#  $1: Interface name
+# Returns
+#  1: Valid
+#  0: Invalid
+function isValidInterfaceFn() {
+	[ -z "$(listNetworkInterfacesFn | grep "$1")" ]
+}
+
+# Reads various netowrk configuration options from related files
+# Arguments
+#   $1 Interface
+# Return
+#   1: Success
+#   0: Failure
+# Echoes
+#   @1: Textual table
+#       -----------------------
+#       mode dhcp|static|manual|disable
+#	state UP|DOWN
+#       ip X.X.X.X
+#       netmask X.X.X:X
+#       gateway X.X.X.X or None
+#       nameserver1 X.X.X.X (optional)
+#       nameserver2 X.X.X.X (optional)
+#	protection WEP|WPA|open (only for wlan interfaces)
+#	SSID XXXX (only for wlan interfaces)
+#	WLANKEY XXXX (only for wlan interfaces)
+#   @0: Error code
+# Error codes
+#   -4: Invalid interface
+function readNetworkConfigurationFn() {
+	isValidInterfaceFn "$1"
+	if [ $? -eq 1 ]; then
+		# Read network configuration from $IFACES_CONFIG
+		TFILEIFACES=$(sed 's/^[ \t]*//;s/[ \t]*$//;s/^#.*//' $IFACES_CONFIG)
+
+		# Place everything after matching iface in a variable and delete (possible) subsequent ifaces from variable
+		CONTENT=$(echo -e "$TFILEIFACES" | grep -A20 "iface $1 inet " | sed '1d;/\(iface\|auto\|allow-hotplug\)/,$d')
+
+		# 1: Extract and print dhcp, static, manual or disable mode
+		MODE=$(echo -e "$TFILEIFACES" | awk "/iface $1 inet /"'{ print $4; nextfile }')
+		[ -z "$MODE" ] && MODE=disable
+		echo "mode $MODE"
+
+		# 2: Get and print current state
+		ip a | awk "/$1:.*state/"'{ sub(".*state",""); print "state "$1 }'
+
+		# 3: Get and print current IP
+		CIP=$(ip -4 a show $1 | awk '/^ *inet/{ sub("/.*","",$2); print $2; exit; }');
+		[ -z "$CIP" ] && CIP=$(echo -e "$CONTENT" | awk '/address/{ print $2; exit; }')
+		[ -z "$CIP" ] && CIP="0.0.0.0"
+		echo "ip $CIP"
+
+		# 4: Calculate and print current mask
+		CSM=$(ipcalc $(ip -4 -o a show $1 | awk '{print $4}') | awk '/Netmask/{ print $2; exit; }')
+		[ -z "$CSM" ] && CSM=$(ipcalc $CIP | awk '/Netmask/{ print $2; exit; }')
+		echo "netmask $CSM"
+
+		# 5: Get an print gateway
+		CGW=$(echo -e "$CONTENT" | awk '/gateway/{ print $2; exit; }')
+		[ -z "$CGW" ] && { [ "$MODE" = "dhcp" ] && { CGW=$(ip route show | awk '/default|0.0.0.0/{ print $3; exit; }'); } || CGW="None"; }
+		echo "gateway $CGW"
+
+	        # 6: Read and print nameservers from /etc/resolv.conf
+		(
+			IFS=' '; c=1; grep -w ^nameserver /etc/resolv.conf | while read a b; do
+				[ -z "$a" -o -z "$b" ] || echo "$a$c $b"; ((c++))
+			done
+		)
+
+		# 7: Extract and print wlan configuration
+		case $1 in
+			wlan?|ra?)
+				MODEWPA=$(echo -e "$CONTENT" | grep ^wpa-)
+				MODEWEP=$(echo -e "$CONTENT" | grep ^wireless-essid)
+				if [ ! -z "$MODEWPA" ]; then
+					PROTECTION="WPA"
+				elif [ ! -z "$MODEWEP" ]; then
+					PROTECTION="WEP"
+				else
+					PROTECTION="open"
+				fi
+
+				# Extract wlan credentials
+				SSID=""
+				WLANKEY=""
+				case "$PROTECTION" in
+					WPA)
+						SSID=$(echo -e "$CONTENT" | sed -ne 's/wpa-ssid[\ ]\(.*\)/\1/p')
+						WLANKEY=$(echo -e "$CONTENT" | sed -ne 's/wpa-psk[\ ]\(.*\)/\1/p')
+					;;
+					WEP)
+						SSID=$(echo -e "$CONTENT" | sed -ne 's/wireless-essid[\ ]\(.*\)/\1/p')
+						WLANKEY=$(echo -e "$CONTENT" | sed -ne 's/wireless-key[\ ]\(.*\)/\1/p')
+					;;
+					open)
+						SSID=$(echo -e "$CONTENT" | sed -ne 's/wireless-essid[\ ]\(.*\)/\1/p')
+					;;
+				esac
+				echo "protection $PROTECTION"
+				if [ "$GUIMODE" -eq 1 ]; then
+					echo "ssid $SSID"
+					echo "key $WLANKEY"
+				else
+					echo "ssid $(echo $SSID | base64 --wrap=0)"
+					echo "key $(echo $WLANKEY | base64 --wrap=0)"
+				fi
+			;;
+		esac
+		return 1;
+	fi
+	return 0;
+}
+
+
+# Reads available WLAN Networks into global array WNETWORKS
+# Arguments
+#   $1 Interface
+# Return
+#  -
+function scanWLANNetworksFn() {
+	ip link set $1 up &>/dev/null; sleep 3
+	IFS=$'\n';
+	OUTPUT=($(iwlist $1 scan | tee /tmp/iwliststatus | tac));
+
+	WNETWORKS=();
+	WLAN=();
+	X=-1;
+	for LINE in ${OUTPUT[@]}; do # Fill WNETWORKS array
+		if [[ $LINE =~ "Cell" ]]; then
+			if [ ${#WLAN[0]} -gt 2 ]; then
+				[ -z ${WLAN[1]} ] && WLAN[1]="Open";
+				[ "${WLAN[2]}" = "on" -a "${WLAN[1]}" = "Open" ] && WLAN[1]="WEP";
+				[ "${WLAN[3]}" = '' ] && WLAN[3]=0;
+				((X++));
+				WLAN[0]=$(echo ${WLAN[0]} | sed "s/,/\\\u002c/g")
+				WNETWORKS[$X]="${WLAN[0]},${WLAN[1]},${WLAN[2]},${WLAN[3]}";
+			fi
+			WLAN=();
+		elif [[ $LINE =~ "ESSID" ]]; then
+			WLAN[0]=$(echo $LINE | cut -f2 -d":");
+		elif [[ $LINE =~ "WPA" ]]; then
+			WLAN[1]="WPA";
+		elif [[ $LINE =~ "Encryption key" ]]; then
+			WLAN[2]=$(echo $LINE | cut -f2 -d":");
+		elif [[ $LINE =~ "Signal level" ]]; then
+			WLAN[3]=$(echo $LINE | awk -F "=" '{ sub(" .*","",$2); print $2 }'); # cut -d'/' -f1
+			if [ "${WLAN[3]}" != '' ]; then
+				WLAN[3]=$((100*${WLAN[3]}));
+			else
+				WLAN[3]=$(echo $LINE | awk '{ sub(".*level[=:]",""); print $1 }');
+			fi
+                fi
+	done;
+
+	IFS=',';
+	SWITCH=1;
+	while [ $SWITCH -eq 1 ]; do # Sort WNETWORKS array
+		SWITCH=0;
+		for ((C=0; C<$X; C++)); do
+			WLAN=(${WNETWORKS[$C]});
+			WLAN1=(${WNETWORKS[$(($C+1))]});
+			if [ ${WLAN[3]} -lt ${WLAN1[3]} ]; then
+				TEMP=${WNETWORKS[$C]};
+				WNETWORKS[$C]=${WNETWORKS[$(($C+1))]};
+				WNETWORKS[$(($C+1))]=$TEMP;
+				SWITCH=1;
+			fi
+		done;
+	done;
+	IFS=$ORIGINALIFS;
+}
+
+# Restart a (w)lan adapter
+# Arguments
+#  $1 Interface name
+# Return
+#  @: Process id of the ifup process
+#  0: Process ifup not running
+function restartAdapterFn() {
+	[ -e /run/interfaces.xbian ] && { mv $IFACES_CONFIG $IFACES_CONFIG.new; mv /run/interfaces.xbian $IFACES_CONFIG; }
+	ifdown $1 >&/dev/null; ifdown --force $1 >&/dev/null
+	pkill -f "(dhclient|wpa_supplicant|wpa_cli).*$1" &>/dev/null
+	[ -e $IFACES_CONFIG.new ] && { mv $IFACES_CONFIG.new $IFACES_CONFIG; chmod 0600 $IFACES_CONFIG; }
+	{ sleep 0.5; nohup ifup $1; } &>/tmp/ifupstatus &
+	p=$!; echo $p > /run/ifup.pid
+	return $p
+}
+
+# Gets the status of the (w)lan restart
+# Arguments
+#  $1 Interface name
+# Return
+#  0: The (w)lan status file does not exist
+#  1: Connecting to (w)lan network
+#  2: Successfully connected to network
+#  3: Failed to connected to network
+function getConnectStatusFn() {
+	if [ -f /tmp/ifupstatus ]; then
+		if grep -qwE "^iface $1.*(static|manual)" $IFACES_CONFIG && ! ip a | grep -qw "$1.*DORMANT"; then
+			STATUS=2;
+		elif grep -qw "bound" /tmp/ifupstatus; then
+			STATUS=2;
+		elif grep -qw 'No DHCPOFFERS\|Terminated\|RTNETLINK' /tmp/ifupstatus; then
+			STATUS=3;
+		else
+			STATUS=1;
+		fi
+		echo -e "\ngetConnectStatusFn $STATUS" >>/tmp/ifupstatus
+		rm -f /run/ifup.pid
+	else
+		STATUS=0;
+	fi
+	
+	return $STATUS;
+}
+
+# Gets type of adapter
+# Arguments
+#  $1 Interface name
+# Return
+#  1: Adapter is WLAN
+#  0: Adapter is anything else
+function getAdapterTypeFn() {
+	[ ! -d "/sys/class/net/$1/wireless"  -a -d "/sys/class/net/$1" ]
+}

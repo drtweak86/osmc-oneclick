@@ -1,11 +1,20 @@
 [Unit]
-Description=OneClick first boot
-After=network-online.target
-Wants=network-online.target
+Description=OneClick First Boot (Stage 1)
+DefaultDependencies=no
+After=local-fs.target
+Wants=local-fs.target
+# Run before normal multi-user services so we can prompt / prepare cleanly
+Before=multi-user.target kodi.service xbmc.service mediacenter.service
+
+# Only run if our script exists and we haven't done Stage 1 yet
+ConditionPathExists=/boot/firstboot.sh
+ConditionPathExists=!/var/lib/oneclick/stage1-done
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /boot/firstboot.sh
+ExecStart=/usr/bin/bash -lc '/boot/firstboot.sh'
+StandardOutput=journal+console
+StandardError=journal+console
 RemainAfterExit=no
 
 [Install]

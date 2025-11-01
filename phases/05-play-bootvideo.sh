@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
+source /opt/osmc-oneclick/phases/31_helpers.sh
 set -euo pipefail
 VID="/boot/matrix_boot.mp4"
 [ -f "$VID" ] || exit 0

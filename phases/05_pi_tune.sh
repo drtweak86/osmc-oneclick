@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091
-source /opt/osmc-oneclick/phases/31_helpers.sh
 # phases/05_pi_tune.sh
 # Raspberry Pi 4B media optimisation (OC + GPU mem) via per-file include.
-# Idempotent; safe defaults; Pi 4 only.
+# Idempotent; safe defaults; XBian/OSMC-friendly (no systemd needed).
 
 set -euo pipefail
+
+# (Optional) helpers if present; script works fine without them
+[ -f /opt/osmc-oneclick/phases/31_helpers.sh ] && . /opt/osmc-oneclick/phases/31_helpers.sh || true
+
 say(){ echo "[oneclick][05_pi_tune] $*"; }
 
-# -------- Detect boot config location ---------------------------------------
+# -------- Locate active boot config (XBian uses /boot) ----------------------
 BOOT_CFG="/boot/config.txt"
 [ -f /boot/firmware/config.txt ] && BOOT_CFG="/boot/firmware/config.txt"
 
@@ -16,12 +18,12 @@ CFG_DIR="$(dirname "$BOOT_CFG")/config.txt.d"
 CFG_FILE="$CFG_DIR/99-media-tune.conf"
 
 # -------- Only on Raspberry Pi 4 --------------------------------------------
-if ! grep -q "Raspberry Pi 4" /proc/device-tree/model 2>/dev/null; then
+if ! grep -qiE "raspberry[[:space:]]+pi[[:space:]]*4" /proc/device-tree/model 2>/dev/null; then
   say "Not a Raspberry Pi 4 — skipping Pi tuning."
   exit 0
 fi
 
-# -------- Tunables (override via env if desired) ----------------------------
+# -------- Tunables (override via env) ---------------------------------------
 ARM_FREQ="${ARM_FREQ:-2000}"        # MHz
 GPU_FREQ="${GPU_FREQ:-750}"         # MHz
 OVER_VOLTAGE="${OVER_VOLTAGE:-6}"   # -16..8
@@ -29,6 +31,12 @@ GPU_MEM="${GPU_MEM:-320}"           # MB
 DTO="${DTO:-vc4-kms-v3d,cma-512}"   # KMS + larger CMA for 4K UI/HEVC
 
 # -------- Basic sanity on values -------------------------------------------
+isnum(){ [[ "${1:-}" =~ ^-?[0-9]+$ ]]; }
+isnum "$ARM_FREQ"      || ARM_FREQ=2000
+isnum "$GPU_FREQ"      || GPU_FREQ=750
+isnum "$OVER_VOLTAGE"  || OVER_VOLTAGE=6
+isnum "$GPU_MEM"       || GPU_MEM=320
+
 clamp() { local v=$1 lo=$2 hi=$3; [ "$v" -lt "$lo" ] && v=$lo; [ "$v" -gt "$hi" ] && v=$hi; echo "$v"; }
 ARM_FREQ="$(clamp "$ARM_FREQ" 1500 2200)"
 GPU_FREQ="$(clamp "$GPU_FREQ" 500 800)"
@@ -53,8 +61,8 @@ gpu_mem=${GPU_MEM}
 dtoverlay=${DTO}
 EOF
 
-# -------- Ensure include in main config -------------------------------------
-if ! grep -Eq '^[[:space:]]*include[[:space:]]+config\.txt\.d/\*\.conf' "$BOOT_CFG" 2>/dev/null; then
+# -------- Ensure include in main config (avoid duplicates) ------------------
+if ! grep -Eq '^[[:space:]]*include[[:space:]]+config\.txt\.d/\*\.conf' "$BOOT_CFG"; then
   say "Linking $(basename "$CFG_DIR")/*.conf in $(basename "$BOOT_CFG")"
   printf '\n# Include per-file configs (OneClick)\n[all]\ninclude config.txt.d/*.conf\n' >> "$BOOT_CFG"
 fi

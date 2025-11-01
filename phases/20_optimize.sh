@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
+source /opt/osmc-oneclick/phases/31_helpers.sh
 # phases/20_optimize.sh
 # System optimisations for streaming: rng, DNS cache, TCP tuning with BBR fallback.
 # Does NOT touch /boot or GPU/OC (handled by 05_pi_tune.sh).

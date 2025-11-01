@@ -1,15 +1,26 @@
-# systemd/batnet-vpn-unlock.service
+# /etc/systemd/system/batnet-vpn-unlock.service
 [Unit]
 Description=Unlock encrypted Surfshark VPN configs (gocryptfs)
+Documentation=man:gocryptfs(1)
 After=network-online.target
 Wants=network-online.target
+Before=wg-quick@*.service
+ConditionPathExists=/etc/batnet-vpn-encrypted
 
 [Service]
 Type=oneshot
-# Prompts at boot for the passphrase; mounts /etc/batnet-vpn (decrypted view)
-ExecStart=/usr/bin/gocryptfs -extpass 'systemd-ask-password "Unlock Surfshark VPN vault:"' /etc/batnet-vpn-encrypted /etc/batnet-vpn
+ExecStart=/usr/bin/gocryptfs \
+    -extpass 'systemd-ask-password "Enter Surfshark VPN vault passphrase:"' \
+    /etc/batnet-vpn-encrypted /etc/batnet-vpn
 ExecStop=/bin/umount /etc/batnet-vpn
 RemainAfterExit=yes
+TimeoutSec=30s
+
+# Security hardening
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target

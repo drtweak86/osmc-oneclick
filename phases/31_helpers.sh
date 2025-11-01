@@ -1,64 +1,84 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-# ---- Toast + helpers (single source of truth) ----
-toast_vpn_simple() {
-  # Args: COUNTRY_NAME PCT SPEED_MBPS
-  local country="$1" pct="$2" speed="$3"
-  command -v kodi-send >/dev/null 2>&1 || return 0
-  kodi-send --action="Notification(VPN,${country}  ${pct}%  ${speed} Mbps,6000)" >/dev/null 2>&1 || true
-}
+# ---- Common paths (XBian) ----
+KODI_USER="${KODI_USER:-xbian}"
+KODI_HOME="${KODI_HOME:-/home/${KODI_USER}/.kodi}"
+ADDONS_DIR="${ADDONS_DIR:-${KODI_HOME}/addons}"
+PKG_DIR="${PKG_DIR:-${ADDONS_DIR}/packages}"
+LOG_TAG="${LOG_TAG:-oneclick}"
 
-# Country name from a WireGuard iface pattern like de-ber, nl-ams, uk-lon, us-nyc, etc.
-country_name_from_iface() {
-  local ifname="${1:-}" cc=""
-  cc="$(printf '%s' "$ifname" | sed -n 's/^\([a-z][a-z]\)[-_].*/\1/p')"
-  case "$cc" in
-    de) echo "Germany" ;;
-    nl) echo "Netherlands" ;;
-    gb|uk) echo "United Kingdom" ;;
-    us) echo "United States" ;;
-    fr) echo "France" ;;
-    se) echo "Sweden" ;;
-    no) echo "Norway" ;;
-    es) echo "Spain" ;;
-    it) echo "Italy" ;;
-    be) echo "Belgium" ;;
-    dk) echo "Denmark" ;;
-    ie) echo "Ireland" ;;
-    ch) echo "Switzerland" ;;
-    at) echo "Austria" ;;
-    *) echo "Unknown" ;;
-  esac
-}
+mkdir -p "$ADDONS_DIR" "$PKG_DIR" >/dev/null 2>&1 || true
 
-# Quality % from Mbps (cap at 100). Default scale tops out around 200 Mbps.
-quality_pct_from_speed() {
-  local mbps="${1%.*}"
-  [[ -z "$mbps" || "$mbps" -lt 0 ]] && echo 0 && return
-  local pct=$(( mbps * 100 / 200 ))
-  (( pct > 100 )) && pct=100
-  echo "$pct"
-}
+log()  { printf '[%s] %s\n' "$LOG_TAG" "$*"; }
+warn() { printf '[%s][WARN] %s\n' "$LOG_TAG" "$*" >&2; }
+die()  { printf '[%s][FATAL] %s\n' "$LOG_TAG" "$*" >&2; exit 1; }
 
-# De-duplicate VPN toasts and ignore 0-values
-toast_vpn_once() {
-  local cc="$1" pct="$2" dl="$3"
-  if [[ -z "$cc" || -z "$pct" || -z "$dl" || "$pct" = "0" || "$dl" = "0" ]]; then
-    return 0
+# ---- Tiny URL fetcher for "latest" zip from a page ----
+# Usage: fetch_latest_zip "https://example/releases" "repo-name-like" "/tmp/out.zip"
+fetch_latest_zip() {
+  local page_url="$1" match_hint="$2" out_zip="$3"
+  local ua="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+
+  log "Fetching latest zip from: $page_url"
+  local page
+  page="$(curl -fsSL -A "$ua" "$page_url")" || { warn "curl failed: $page_url"; return 1; }
+
+  # Find first .zip that contains match_hint
+  local zip_url
+  zip_url="$(printf '%s' "$page" | grep -Eo 'https?://[^"]+\.zip' | grep -i "$match_hint" | head -n1 || true)"
+  if [ -z "$zip_url" ]; then
+    warn "No .zip link matching '$match_hint' found on $page_url"
+    return 1
   fi
-  local state="/run/wg-autoswitch.lasttoast"
-  local key="${cc}:${pct}:${dl}"
-  local last=""
-  [[ -f "$state" ]] && last="$(cat "$state" 2>/dev/null)"
-  if [[ "$key" != "$last" ]]; then
-    toast_vpn_simple "$cc" "$pct" "$dl"
-    printf '%s' "$key" > "$state"
+
+  log "Downloading: $zip_url"
+  curl -fsSL -A "$ua" -o "$out_zip" "$zip_url" || { warn "download failed: $zip_url"; return 1; }
+  [ -s "$out_zip" ] || { warn "empty zip: $out_zip"; return 1; }
+  return 0
+}
+
+# ---- Install a Kodi zip by extracting into addons dir ----
+# Usage: kodi_install_zip "/path/repository.xxx-1.0.0.zip"
+kodi_install_zip() {
+  local zip="$1"
+  [ -f "$zip" ] || { warn "zip not found: $zip"; return 1; }
+
+  log "Installing zip into $ADDONS_DIR: $(basename "$zip")"
+  mkdir -p "$PKG_DIR"
+  cp -f "$zip" "$PKG_DIR/" || true
+
+  # Extract; top-level directory becomes addon id (repo or plugin)
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  unzip -o "$zip" -d "$tmpdir" >/dev/null
+
+  # Move contents (one or more addon dirs) into addons dir
+  shopt -s nullglob
+  for d in "$tmpdir"/*; do
+    [ -d "$d" ] || continue
+    local addon_id
+    addon_id="$(basename "$d")"
+    rm -rf  "$ADDONS_DIR/$addon_id"
+    mv "$d" "$ADDONS_DIR/$addon_id"
+    chown -R "${KODI_USER}:${KODI_USER}" "$ADDONS_DIR/$addon_id"
+    log "Installed addon: $addon_id"
+  done
+  rm -rf "$tmpdir"
+}
+
+# ---- Light wrapper to restart Kodi on XBian ----
+kodi_restart() {
+  # XBian service name is "xbmc"
+  if command -v service >/dev/null 2>&1; then
+    service xbmc restart || true
   fi
 }
 
-# Nice Kodi popup
-kodi_dialog() {
-  command -v kodi-send >/dev/null 2>&1 || return 0
-  kodi-send --action="Notification($1,$2,8000,/home/osmc/.kodi/media/notify/icons/info.png)" >/dev/null 2>&1 || true
+# ---- Convenience: ensure a file exists with content ----
+ensure_file() {
+  # ensure_file /path/to/file "content"
+  local f="$1"; shift
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$*" > "$f"
 }

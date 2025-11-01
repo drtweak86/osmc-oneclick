@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # phases/45_kodi_qol.sh
-# Kodi QoL tweaks for streaming on Pi/OSMC (Omega):
-# - Adjust refresh rate (on start/stop)
-# - Disable “sync playback to display”
-# - Conservative HQ scalers (10%)
-# - Enable audio passthrough, auto-detect passthrough device to match current audio device
-# - Enable common passthrough codecs (AC3, EAC3, DTS, DTS-HD, TrueHD)
-# Idempotent via autoexec.py (runs once, then renames to autoexec_done.py)
-
+# Kodi QoL tweaks (Omega): refresh rate on start/stop, disable sync-to-display,
+# HQ scalers 10%, enable passthrough + codecs, run once via autoexec.py.
 set -euo pipefail
 log(){ echo "[oneclick][45_kodi_qol] $*"; }
-warn(){ echo "[oneclick][WARN] $*">&2; }
+warn(){ echo "[oneclick][WARN] $*" >&2; }
 
-USER="osmc"
-KODI_HOME="/home/${USER}/.kodi"
+KODI_USER="${KODI_USER:-xbian}"
+KODI_HOME="/home/${KODI_USER}/.kodi"
 USERDATA="${KODI_HOME}/userdata"
 AUTOEXEC="${USERDATA}/autoexec.py"
 AUTOEXEC_DONE="${USERDATA}/autoexec_done.py"
 
 mkdir -p "$USERDATA"
+
+# Pick service name: XBian uses 'xbmc', OSMC uses 'mediacenter'
+KODI_SVC="xbmc"
+if systemctl list-unit-files 2>/dev/null | grep -q '^mediacenter\.service'; then
+  KODI_SVC="mediacenter"
+fi
 
 # Skip if already applied
 if [ -f "$AUTOEXEC_DONE" ]; then
@@ -55,33 +55,32 @@ def get_setting(key):
         return None
 
 # --- Core QoL video settings ---
-set_setting("videoscreen.adjustrefreshrate", 1)  # On start/stop
-set_setting("videoscreen.hqscalers", 10)        # 10% HQ scalers
-set_setting("videoplayer.smoothvideo", False)   # Disable sync playback to display
+set_setting("videoscreen.adjustrefreshrate", 1)   # On start/stop
+set_setting("videoscreen.hqscalers", 10)          # 10% HQ scalers
+set_setting("videoplayer.smoothvideo", False)     # Disable sync playback to display
 
-# --- Audio Passthrough: enable and align passthrough device with current audio device ---
+# --- Audio Passthrough ---
 set_setting("audiooutput.passthrough", True)
 
-# Detect current audio device and re-use for passthroughdevice
+# Use current audio device as passthrough device (if present)
 adev = get_setting("audiooutput.audiodevice")
-if isinstance(adev, str) and len(adev) > 0:
+if isinstance(adev, str) and adev:
     set_setting("audiooutput.passthroughdevice", adev)
 
-# Enable common passthrough codecs (soundbar/AVR-capable)
-# (Kodi will ignore unsupported ones silently)
+# Enable common passthrough codecs (ignored if unsupported)
 for k in [
     "audiooutput.ac3passthrough",
     "audiooutput.eac3passthrough",
     "audiooutput.dtspassthrough",
     "audiooutput.dtshdpassthrough",
-    "audiooutput.truehdpassthrough"
+    "audiooutput.truehdpassthrough",
 ]:
     set_setting(k, True)
 
-# Dolby transcode (useful if AC3 is desired from non-AC3 sources)
+# Optionally transcode to AC3 from non-AC3
 set_setting("audiooutput.eac3transcode", True)
 
-# Toast confirm
+# Toast + self-disable
 try:
     dev = get_setting("audiooutput.passthroughdevice") or "Auto"
     msg = u"Refresh=Start/Stop · HQ=10 · Passthrough=On · Dev={}".format(dev)
@@ -89,7 +88,6 @@ try:
 except Exception:
     pass
 
-# Self-disable
 try:
     SELF = xbmc.translatePath('special://profile/autoexec.py')
     DONE = xbmc.translatePath('special://profile/autoexec_done.py')
@@ -99,15 +97,14 @@ except Exception:
     pass
 PY
 
-chown "${USER}:${USER}" "$AUTOEXEC"
+chown "${KODI_USER}:${KODI_USER}" "$AUTOEXEC"
 chmod 0644 "$AUTOEXEC"
 
-# Ensure Kodi is running so JSON-RPC applies now (otherwise it will apply next start)
-if ! systemctl is-active --quiet mediacenter; then
-  log "Starting mediacenter so QoL settings can apply…"
-  systemctl start mediacenter
-  sleep 10
+# Ensure Kodi is running so JSON-RPC applies now (otherwise next start)
+if ! systemctl is-active --quiet "$KODI_SVC"; then
+  log "Starting $KODI_SVC so QoL settings can apply…"
+  systemctl start "$KODI_SVC" || warn "Could not start $KODI_SVC (will apply on next launch)"
+  sleep 10 || true
 fi
 
-log "QoL autoexec installed — it will apply once, toast the chosen device, then disable itself."
-exit 0
+log "QoL autoexec installed — it will apply once, toast, then disable itself."

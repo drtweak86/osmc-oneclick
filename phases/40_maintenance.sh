@@ -1,18 +1,40 @@
 #!/usr/bin/env bash
-# phases/40_maintenance.sh
+# phases/40_maintenance.sh — Weekly maintenance for XBian/OSMC (cron-based)
 set -euo pipefail
 
-# Helpers (kodi_dialog, log wrappers, etc.)
-. /opt/osmc-oneclick/phases/31_helpers.sh || true
+log(){ echo "[oneclick][40_maintenance] $*"; }
 
-_log "[40_maintenance] Installing weekly maintenance service/timer"
+log "Installing weekly maintenance cron job for XBian"
 
+# --- Detect Kodi user/home ---
+if id -u xbian >/dev/null 2>&1; then
+  KODI_USER=xbian
+elif id -u osmc >/dev/null 2>&1; then
+  KODI_USER=osmc
+else
+  log "No xbian/osmc user found, aborting."
+  exit 0
+fi
+KODI_HOME="/home/${KODI_USER}/.kodi"
+
+# --- Ensure directories ---
 install -d -m 0755 /opt/osmc-oneclick/scripts
+install -d -m 0755 /var/log/osmc-oneclick
 
-# ---- Maintenance payload ---------------------------------------------------
+# --- Maintenance payload ---
 cat >/opt/osmc-oneclick/scripts/run-weekly-maint.sh <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if id -u xbian >/dev/null 2>&1; then
+  KODI_USER=xbian
+elif id -u osmc >/dev/null 2>&1; then
+  KODI_USER=osmc
+else
+  echo "[weekly-maint] No xbian/osmc user found" >&2
+  exit 0
+fi
+KODI_HOME="/home/${KODI_USER}/.kodi"
 
 log(){ echo "[weekly-maint] $*"; }
 
@@ -24,59 +46,36 @@ apt-get autoremove -y || true
 apt-get clean -y || true
 
 log "Prune Kodi temp & old thumbnails"
-find /home/osmc/.kodi/temp -type f -mtime +7 -delete 2>/dev/null || true
-find /home/osmc/.kodi/userdata/Thumbnails -type f -mtime +30 -delete 2>/dev/null || true
+find "$KODI_HOME/temp" -type f -mtime +7 -delete 2>/dev/null || true
+find "$KODI_HOME/userdata/Thumbnails" -type f -mtime +30 -delete 2>/dev/null || true
 
 log "SQLite VACUUM (textures/videos/music if present)"
-for db in /home/osmc/.kodi/userdata/Database/Textures*.db \
-          /home/osmc/.kodi/userdata/Database/MyVideos*.db \
-          /home/osmc/.kodi/userdata/Database/MyMusic*.db; do
-  [ -f "$db" ] && sqlite3 "$db" 'PRAGMA journal_mode=WAL; VACUUM;' || true
+for db in "$KODI_HOME/userdata/Database"/Textures*.db \
+          "$KODI_HOME/userdata/Database"/MyVideos*.db \
+          "$KODI_HOME/userdata/Database"/MyMusic*.db; do
+  [ -f "$db" ] && command -v sqlite3 >/dev/null 2>&1 && sqlite3 "$db" 'PRAGMA journal_mode=WAL; VACUUM;' || true
 done
 
 log "Journal & FS housekeeping"
-journalctl --vacuum-time=14d || true
+command -v journalctl >/dev/null 2>&1 && journalctl --vacuum-time=14d || true
 command -v fstrim >/dev/null 2>&1 && fstrim -av || true
 
 log "Unbound sanity (if enabled)"
-systemctl is-enabled --quiet unbound && systemctl restart unbound || true
+if service unbound status >/dev/null 2>&1; then
+  service unbound restart || true
+fi
 
 log "Done."
 SH
 chmod +x /opt/osmc-oneclick/scripts/run-weekly-maint.sh
 
-# ---- systemd unit + timer --------------------------------------------------
-cat >/etc/systemd/system/osmc-weekly-maint.service <<'UNIT'
-[Unit]
-Description=OSMC weekly maintenance
-After=network-online.target
+# --- Cron job (Sunday 03:30) ---
+cat >/etc/cron.d/osmc-weekly-maint <<'CRON'
+# Run weekly maintenance (Sundays 03:30)
+30 3 * * 0 root /opt/osmc-oneclick/scripts/run-weekly-maint.sh >/var/log/osmc-oneclick/weekly-maint.log 2>&1
+CRON
+chmod 0644 /etc/cron.d/osmc-weekly-maint
 
-[Service]
-Type=oneshot
-ExecStart=/opt/osmc-oneclick/scripts/run-weekly-maint.sh
-Nice=10
-IOSchedulingClass=best-effort
-UNIT
+service cron reload >/dev/null 2>&1 || service cron restart >/dev/null 2>&1
 
-# Timer: Sunday 03:30 Europe/London
-cat >/etc/systemd/system/osmc-weekly-maint.timer <<'UNIT'
-[Unit]
-Description=Run OSMC weekly maintenance
-
-[Timer]
-OnCalendar=Sun *-*-* 03:30:00
-Persistent=true
-RandomizedDelaySec=5m
-Unit=osmc-weekly-maint.service
-
-[Install]
-WantedBy=timers.target
-UNIT
-
-systemctl daemon-reload
-systemctl enable --now osmc-weekly-maint.timer
-
-# Friendly toast if Kodi is running
-kodi_dialog "Maintenance" "Weekly maintenance scheduled (Sundays 03:30)."
-
-_log "[40_maintenance] Timer enabled."
+log "Weekly maintenance scheduled (Sundays 03:30)."

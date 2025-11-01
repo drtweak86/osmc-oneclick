@@ -13,3 +13,13 @@ assets/boot/*.mp3
 # misc
 .DS_Store
 *.swp
+
+# Ignore generated images and local logs
+*.img
+*.zip
+*.gz
+gui-logs/
+tmp-*/
+*.log
+*.sha256
+verify-report-*.txt

@@ -7,6 +7,10 @@ After=network-online.target
 Type=oneshot
 ExecStart=/usr/bin/env bash /opt/osmc-oneclick/phases/40_backup.sh
 Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=append:/var/log/backup-weekly.log
+StandardError=append:/var/log/backup-weekly.log
 
 [Install]
 WantedBy=multi-user.target

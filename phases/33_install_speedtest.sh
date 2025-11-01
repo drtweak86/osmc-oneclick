@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
+source /opt/osmc-oneclick/phases/31_helpers.sh
 # phases/33_install_speedtest.sh
 # Install /usr/local/sbin/if-speedtest: fast interface-bound downlink tester
 # Safe to run repeatedly.

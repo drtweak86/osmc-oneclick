@@ -37,17 +37,9 @@ ensure_latest_rclone() {
 
 need_ver="1.68"
 if ! command -v rclone >/dev/null 2>&1; then
-  log "rclone not found — installing…"
-  ensure_latest_rclone || log "WARN: rclone install script failed (offline?)."
-else
-  have_ver="$(rclone version 2>/dev/null | sed -n 's/^rclone v\([0-9.]\+\).*/\1/p' | head -n1 || true)"
-  if [ -z "${have_ver:-}" ] || { [ "$(printf '%s\n' "$need_ver" "$have_ver" | sort -V | head -n1)" = "$have_ver" ] && [ "$have_ver" != "$need_ver" ]; }; then
-    log "Upgrading rclone (${have_ver:-unknown} → >= $need_ver)…"
-    ensure_latest_rclone || log "WARN: rclone upgrade failed (offline?)."
-  else
-    log "rclone $have_ver OK (>= $need_ver)"
-  fi
+  log "Installing latest rclone…"
+  ensure_latest_rclone
+  command -v rclone >/dev/null 2>&1 && log "rclone installed OK" || warn "rclone missing after install"
 fi
-
 hash -r || true
 log "Prereqs ready."

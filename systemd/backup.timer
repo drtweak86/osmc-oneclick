@@ -1,9 +1,10 @@
 [Unit]
-Description=Run backup weekly
+Description=Run weekly backup (Sunday 03:30)
 
 [Timer]
-OnCalendar=Sun 03:30
+OnCalendar=Sun *-*-* 03:30:00
 Persistent=true
+RandomizedDelaySec=5m
 Unit=backup.service
 
 [Install]

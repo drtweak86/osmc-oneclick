@@ -8,10 +8,10 @@
 set -euo pipefail
 
 # Helpers (log/warn/kodi_dialog)
-. "$(dirname "$0")/31_helpers.sh"
+. "$(dirname "$0")/31_helpers.sh" || true
 
-USER="${USER:-osmc}"
-KODI_HOME="/home/${USER}/.kodi"
+KODI_USER="${KODI_USER:-xbian}"
+KODI_HOME="/home/${KODI_USER}/.kodi"
 USERDATA="${KODI_HOME}/userdata"
 
 # Allow BASE_DIR override, otherwise default
@@ -54,15 +54,15 @@ fi
 
 # Atomic install (write to temp then move)
 TMP="$(mktemp "${DEST_AS}.XXXXXX")"
-install -o "${USER}" -g "${USER}" -m 0644 "${ASSET_AS}" "${TMP}"
+install -o "${KODI_USER}" -g "${KODI_USER}" -m 0644 "${ASSET_AS}" "${TMP}"
 mv -f "${TMP}" "${DEST_AS}"
 
 # Ensure ownership on userdata (defensive)
-chown -R "${USER}:${USER}" "${KODI_HOME}" || true
+chown -R "${KODI_USER}:${KODI_USER}" "${KODI_HOME}" || true
 
 # Nice toast in Kodi if available
 if command -v kodi-send >/dev/null 2>&1; then
-  sudo -u "${USER}" kodi-send -a "Notification(Advanced,advancedsettings.xml installed,6000)" || true
+  sudo -u "${KODI_USER}" kodi-send -a "Notification(Advanced,advancedsettings.xml installed,6000)" || true
 fi
 
 log "[advanced] Installed advancedsettings.xml successfully."

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
+source /opt/osmc-oneclick/phases/31_helpers.sh
 # phases/05_pi_tune.sh
 # Raspberry Pi 4B media optimisation (OC + GPU mem) via per-file include.
 # Idempotent; safe defaults; Pi 4 only.

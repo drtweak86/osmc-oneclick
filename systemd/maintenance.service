@@ -1,12 +1,22 @@
+# /etc/systemd/system/osmc-weekly-maint.service
 [Unit]
 Description=Weekly system maintenance for OSMC/Kodi
 Wants=network-online.target
 After=network-online.target
+ConditionPathExists=/opt/osmc-oneclick/phases/41_maintenance.sh
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/env bash /opt/osmc-oneclick/phases/41_maintenance.sh
 Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=append:/var/log/osmc-maint.log
+StandardError=append:/var/log/osmc-maint.log
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target

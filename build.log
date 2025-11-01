@@ -1,0 +1,25 @@
++ mkdir -p tmp-build tmp-mnt/boot tmp-mnt/root
++ '[' '!' -f base-xbian.img ']'
++ cp -f base-xbian.img tmp-build/xbian-oneclick.img
++ IMG=/home/pi/osmc-oneclick/tmp-build/xbian-oneclick.img
+++ sudo losetup -fP --show /home/pi/osmc-oneclick/tmp-build/xbian-oneclick.img
++ LOOP=/dev/loop8
++ echo 'Loop device: /dev/loop8'
+Loop device: /dev/loop8
++ sudo mount /dev/loop8p1 tmp-mnt/boot
++ sudo mount /dev/loop8p2 tmp-mnt/root
++ sudo install -d -m 0755 tmp-mnt/root/opt/osmc-oneclick/phases tmp-mnt/root/opt/osmc-oneclick/assets
++ sudo rsync -a --delete ./phases/ tmp-mnt/root/opt/osmc-oneclick/phases/
++ sudo rsync -a --delete ./assets/ tmp-mnt/root/opt/osmc-oneclick/assets/
++ '[' -f assets/config/wifi-autoswitch ']'
++ sudo install -m 0644 assets/config/wifi-autoswitch tmp-mnt/root/etc/default/wifi-autoswitch
+install: cannot create regular file 'tmp-mnt/root/etc/default/wifi-autoswitch': No such file or directory
++ true
++ '[' -f assets/config/wg-autoswitch ']'
++ sudo install -m 0644 assets/config/wg-autoswitch tmp-mnt/root/etc/default/wg-autoswitch
+install: cannot create regular file 'tmp-mnt/root/etc/default/wg-autoswitch': No such file or directory
++ true
++ sudo tee tmp-mnt/boot/firstboot.sh
++ sudo chmod +x tmp-mnt/boot/firstboot.sh
++ sudo tee tmp-mnt/root/etc/systemd/system/oneclick-firstboot.service
+tee: tmp-mnt/root/etc/systemd/system/oneclick-firstboot.service: No such file or directory

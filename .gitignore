@@ -1,21 +1,15 @@
-# Build outputs
+# build artefacts
 *.img
 *.img.gz
 *.zip
 *.sha256
-*.log
+tmp-build/
+tmp-mnt/
 
-# Temporary files
-/tmp/
-*.tmp
-*.bak
-*.swp
+# huge media we generate/download locally
+assets/boot/*.mp4
+assets/boot/*.mp3
+
+# misc
 .DS_Store
-
-# Mounts
-/mnt/
-/media/
-/loop*/
-
-# Local workdir
-/xtreme-work/
+*.swp

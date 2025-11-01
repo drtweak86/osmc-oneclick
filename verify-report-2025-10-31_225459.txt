@@ -1,0 +1,9 @@
+=== OneClick Verify: Fri 31 Oct 22:54:59 GMT 2025 ===
+Image: tmp-test/xtreme-test.img
+Report: verify-report-2025-10-31_225459.txt
+
+⚠️  No SHA256 provided. Skipping checksum verification.
+
+[*] Attaching image with losetup…
+    loopdev: /dev/loop1
+❌  Unable to detect boot/root partitions

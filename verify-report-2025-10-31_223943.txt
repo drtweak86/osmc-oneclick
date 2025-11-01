@@ -1,0 +1,25 @@
+=== OneClick Verify: Fri 31 Oct 22:39:43 GMT 2025 ===
+Image: base-xbian.img
+Report: verify-report-2025-10-31_223943.txt
+
+⚠️  No SHA256 provided. Skipping checksum verification.
+
+[*] Attaching image with losetup…
+    loopdev: /dev/loop1
+✅  Mounted boot -> /tmp/ocv-boot.Mvry7w, root -> /tmp/ocv-root.A8MgNw
+
+❌  firstboot script missing (/tmp/ocv-boot.Mvry7w/firstboot.sh)
+❌  systemd unit missing (/tmp/ocv-root.A8MgNw/etc/systemd/system/oneclick-firstboot.service)
+❌  unit not enabled (missing wants symlink)
+❌  systemd unit failed verify
+⚠️  kodi-send not found
+❌  oneclick phases dir missing (/tmp/ocv-root.A8MgNw/opt/osmc-oneclick/phases)
+❌  oneclick assets dir missing (/tmp/ocv-root.A8MgNw/opt/osmc-oneclick/assets)
+❌  wifi-autoswitch defaults missing (/tmp/ocv-root.A8MgNw/etc/default/wifi-autoswitch)
+❌  vpn-autoswitch defaults missing (/tmp/ocv-root.A8MgNw/etc/default/wg-autoswitch)
+⚠️  /boot/config.txt lacks include (may be added on first run)
+✅  No CRLF line endings in critical scripts
+✅  Rootfs size: 1.6G/2.2G used
+
+=== SUMMARY ===
+PASS: 3   FAIL: 8   WARN: 3

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
+source /opt/osmc-oneclick/phases/31_helpers.sh
 set -euo pipefail
 log(){ echo -e "[oneclick][32_enable_autoswitch] $*"; }
 

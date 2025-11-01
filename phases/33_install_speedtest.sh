@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091
-source /opt/osmc-oneclick/phases/31_helpers.sh
-# phases/33_install_speedtest.sh
-# Install /usr/local/sbin/if-speedtest: fast interface-bound downlink tester
-# Safe to run repeatedly.
-
+# phases/33_install_speedtest.sh — install /usr/local/sbin/if-speedtest (XBian-safe)
 set -euo pipefail
+
 log(){ echo "[oneclick][33_speedtest] $*"; }
 warn(){ echo "[oneclick][WARN] $*" >&2; }
 
 BIN="/usr/local/sbin/if-speedtest"
 TMP="$(mktemp)"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Ensure deps (best-effort)
+# Ensure target dir exists
+install -d -m 0755 "$(dirname "$BIN")"
+
+# Best-effort deps (okay if offline)
 if command -v apt-get >/dev/null 2>&1; then
-  export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}
+  export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
   apt-get update -y || true
   apt-get install -y --no-install-recommends curl iputils-ping jq ca-certificates || true
 fi
@@ -73,10 +73,8 @@ for url in "${URLS[@]}"; do
   fi
 done
 
-# Primary output: integer Mbps to stdout
 echo "$best_mbps"
 
-# Optional JSON (stderr) so stdout stays a clean number
 if (( JSON == 1 )); then
   {
     echo "{"

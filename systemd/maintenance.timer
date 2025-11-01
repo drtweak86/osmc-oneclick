@@ -1,9 +1,11 @@
+# /etc/systemd/system/maintenance.timer
 [Unit]
-Description=Run weekly maintenance
+Description=Run weekly maintenance (Saturdays 04:00)
 
 [Timer]
-OnCalendar=Sat 04:00
+OnCalendar=Sat *-*-* 04:00:00
 Persistent=true
+RandomizedDelaySec=5m
 Unit=maintenance.service
 
 [Install]

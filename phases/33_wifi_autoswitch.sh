@@ -2,7 +2,7 @@
 # XBian Wi-Fi autoswitch: prefer strongest preferred SSIDs (no ConnMan, no systemd)
 set -euo pipefail
 log(){ echo "[oneclick][33_wifi_autoswitch] $*"; }
-warn(){ echo "[oneclick][WARN] $*">&2; }
+warn(){ echo "[oneclick][WARN] $*" >&2; }
 
 ASSETS_BASE="${ASSETS_BASE:-/opt/osmc-oneclick/assets}"
 ASSET_CFG="${ASSETS_BASE}/config/wifi-autoswitch"
@@ -36,6 +36,9 @@ CFG
 }
 
 install_worker() {
+  # ensure target dir exists
+  install -d -m 0755 /usr/local/sbin
+
   install -D -o root -g root -m 0755 /dev/stdin "$BIN" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -55,7 +58,7 @@ notify() {
   echo "[wifi-autoswitch] $msg"
 }
 
-# Build scan list: SSID -> RSSI
+# Build scan list: SSID → RSSI
 declare -A RSSI
 if command -v iw >/dev/null 2>&1; then
   while IFS= read -r line; do
@@ -77,7 +80,7 @@ BEST_RSSI="-999"
 
 for ssid in $PREFERRED_SSIDS; do
   r="${RSSI[$ssid]:--999}"
-  # prefer by (1) presence, (2) strongest rssi, (3) order in list
+  # prefer by (1) presence, (2) strongest RSSI, (3) order in list
   if [ "$r" -gt "$BEST_RSSI" ]; then
     BEST_RSSI="$r"
     BEST_SSID="$ssid"
@@ -105,6 +108,8 @@ install_cron() {
 */2 * * * * root $BIN >/dev/null 2>&1
 CR
   chmod 0644 "$CRON"
+  # reload cron so the new job is active
+  service cron reload 2>/dev/null || service cron restart 2>/dev/null || true
 }
 
 ensure_deps

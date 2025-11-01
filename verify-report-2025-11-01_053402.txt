@@ -1,0 +1,25 @@
+=== OneClick Verify: Sat  1 Nov 05:34:02 GMT 2025 ===
+Image: /home/pi/osmc-oneclick/tmp-build/xbian-oneclick.img
+Report: verify-report-2025-11-01_053402.txt
+
+⚠️  No SHA256 provided. Skipping checksum verification.
+
+[*] Attaching image with losetup…
+    loopdev: /dev/loop1
+✅  Mounted boot -> /tmp/ocv-boot.zVNfiV, root -> /tmp/ocv-root.kydhlr
+
+✅  firstboot script executable (-rwxr-xr-x 755)
+✅  systemd unit present (/tmp/ocv-root.kydhlr/etc/systemd/system/oneclick-firstboot.service)
+✅  unit enabled (wants symlink)
+❌  systemd unit failed verify
+⚠️  kodi-send not found
+✅  oneclick phases dir present (/tmp/ocv-root.kydhlr/opt/osmc-oneclick/phases)
+✅  oneclick assets dir present (/tmp/ocv-root.kydhlr/opt/osmc-oneclick/assets)
+✅  wifi-autoswitch defaults present (/tmp/ocv-root.kydhlr/etc/default/wifi-autoswitch)
+✅  vpn-autoswitch defaults present (/tmp/ocv-root.kydhlr/etc/default/wg-autoswitch)
+⚠️  /boot/config.txt lacks include (may be added on first run)
+✅  No CRLF line endings in critical scripts
+✅  Rootfs size: 1.6G/2.2G used
+
+=== SUMMARY ===
+PASS: 10   FAIL: 1   WARN: 3

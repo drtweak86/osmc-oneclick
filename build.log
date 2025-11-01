@@ -3,11 +3,11 @@
 + cp -f base-xbian.img tmp-build/xbian-oneclick.img
 + IMG=/home/pi/osmc-oneclick/tmp-build/xbian-oneclick.img
 ++ sudo losetup -fP --show /home/pi/osmc-oneclick/tmp-build/xbian-oneclick.img
-+ LOOP=/dev/loop8
-+ echo 'Loop device: /dev/loop8'
-Loop device: /dev/loop8
-+ sudo mount /dev/loop8p1 tmp-mnt/boot
-+ sudo mount /dev/loop8p2 tmp-mnt/root
++ LOOP=/dev/loop1
++ echo 'Loop device: /dev/loop1'
+Loop device: /dev/loop1
++ sudo mount /dev/loop1p1 tmp-mnt/boot
++ sudo mount /dev/loop1p2 tmp-mnt/root
 + sudo install -d -m 0755 tmp-mnt/root/opt/osmc-oneclick/phases tmp-mnt/root/opt/osmc-oneclick/assets
 + sudo rsync -a --delete ./phases/ tmp-mnt/root/opt/osmc-oneclick/phases/
 + sudo rsync -a --delete ./assets/ tmp-mnt/root/opt/osmc-oneclick/assets/

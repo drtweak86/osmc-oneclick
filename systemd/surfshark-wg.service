@@ -1,13 +1,25 @@
-# systemd/surfshark-wg.service
+# /etc/systemd/system/surfshark-wg.service
 [Unit]
 Description=Surfshark WireGuard VPN (boot-time fastest connect)
-After=batnet-vpn-unlock.service
-Wants=batnet-vpn-unlock.service
+Documentation=man:wg-quick(8)
+After=network-online.target batnet-vpn-unlock.service
+Wants=network-online.target batnet-vpn-unlock.service
+ConditionPathExists=/usr/local/sbin/wg-autoboot-fast
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/wg-autoboot-fast
 RemainAfterExit=yes
+TimeoutStartSec=30s
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
+ProtectSystem=full
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+StandardOutput=append:/var/log/wg-autoboot.log
+StandardError=append:/var/log/wg-autoboot.log
 
 [Install]
 WantedBy=multi-user.target

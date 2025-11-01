@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/22_argon_one.sh
 # Argon One Pi4 V2: install daemon + apply 3-step fan curve (idempotent)
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/33_wifi_autoswitch.sh
 # Wi-Fi autoswitch for OSMC (ConnMan): prefer strongest of preferred SSIDs,
 # with streaming-friendly thresholds + optional Kodi notifications.
@@ -12,7 +15,7 @@ set -euo pipefail
 log(){ echo "[oneclick][33_wifi_autoswitch] $*"; }
 warn(){ echo "[oneclick][WARN] $*">&2; }
 
-ASSETS_BASE="${ASSETS_BASE:-/opt/osmc-oneclick/assets}"
+ASSETS_BASE="${ASSETS_BASE:-/opt/xbian-oneclick/assets}"
 ASSET_CFG="${ASSETS_BASE}/config/wifi-autoswitch"
 CONF="/etc/default/wifi-autoswitch"
 BIN="/usr/local/sbin/wifi-autoswitch"
@@ -98,7 +101,7 @@ toast() {
   local title="$1" msg="$2" icon=""
   command -v kodi-send >/dev/null 2>&1 || return 0
   [ "${KODI_NOTIFY}" = "1" ] || return 0
-  kodi-send --action="Notification(${title},${msg},6000,${icon})" >/dev/null 2>&1 || true
+  nofail kodi-send --action="Notification(${title},${msg},6000,${icon})" >/dev/null 2>&1 || true
 }
 
 # Parse current service id for Wi-Fi

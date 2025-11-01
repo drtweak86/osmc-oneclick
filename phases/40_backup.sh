@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 set -Eeuo pipefail
 
-LOG_DIR="/var/log/osmc-oneclick"
+LOG_DIR="/var/log/xbian-oneclick"
 LOG="${LOG_DIR}/backup.log"
-BACKUP_DIR="/opt/osmc-oneclick/backups"
+BACKUP_DIR="/opt/xbian-oneclick/backups"
 DATE="$(date +%F_%H-%M-%S)"
 TARGET="${BACKUP_DIR}/osmc_backup_${DATE}.zip"
-RCLONE_REMOTE="gdrive:osmc-backups"   # adjust if your remote/folder differs
+RCLONE_REMOTE="gdrive:xbian-backups"   # adjust if your remote/folder differs
 
 mkdir -p "$LOG_DIR" "$BACKUP_DIR"
 echo "[backup] ===== $(date) =====" >> "$LOG"
@@ -17,9 +20,9 @@ command -v rclone >/dev/null 2>&1 || { echo "[backup] rclone missing" >> "$LOG";
 
 # Build archive (adjust includes as you like)
 zip -qr "$TARGET" \
-  /home/osmc/.kodi \
+  /home/xbian/.kodi \
   /etc/wireguard \
-  /opt/osmc-oneclick \
+  /opt/xbian-oneclick \
   || { echo "[backup] zip failed" >> "$LOG"; exit 1; }
 
 # Upload

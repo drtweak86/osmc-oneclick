@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
+set -euo pipefail
 
 # =========================
 # Config / defaults
@@ -19,7 +22,7 @@ WG_SWITCH_BIN="/usr/local/sbin/wg-switch"
 IF_SPEEDTEST="/usr/local/sbin/if-speedtest"
 
 # Helpers (toast + country/quality)
-. /opt/osmc-oneclick/phases/31_helpers.sh
+. /opt/xbian-oneclick/phases/31_helpers.sh
 
 # =========================
 # Logging helpers

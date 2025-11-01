@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/42_addons.sh
 # Install Kodi 3rd-party repos first, then add-ons from those repos.
 # Relies on helpers in 31_helpers.sh: log, warn, fetch_latest_zip, install_repo_from_url, install_addon, install_zip_from_url
@@ -64,17 +70,17 @@ done
 KODI_SEND="/usr/bin/kodi-send"
 if [[ -x "$KODI_SEND" ]]; then
   # Ensure Kodi is running so JSON-RPC works
-  if ! systemctl is-active --quiet mediacenter; then
-    log "[addons] Kodi not running — starting mediacenter to finish Trakt auth"
-    systemctl start mediacenter
+  if ! systemctl is-active --quiet xbmc; then
+    log "[addons] Kodi not running — starting xbmc to finish Trakt auth"
+    systemctl start xbmc
     sleep 15
   fi
 
   log "[addons] Enabling Trakt and triggering OAuth"
-  sudo -u osmc "$KODI_SEND" -a "InstallAddon(script.trakt)" || true
-  sudo -u osmc "$KODI_SEND" -a "EnableAddon(script.trakt)" || true
-  sudo -u osmc "$KODI_SEND" -a "RunScript(script.trakt)" || true
-  sudo -u osmc "$KODI_SEND" -a "Notification(Setup,Trakt installed — follow on-screen code to link,8000)" || true
+  sudo -u xbian "$KODI_SEND" -a "InstallAddon(script.trakt)" || true
+  sudo -u xbian "$KODI_SEND" -a "EnableAddon(script.trakt)" || true
+  sudo -u xbian "$KODI_SEND" -a "RunScript(script.trakt)" || true
+  sudo -u xbian "$KODI_SEND" -a "Notification(Setup,Trakt installed — follow on-screen code to link,8000)" || true
 else
   warn "[addons] kodi-send not found; skipping Trakt OAuth trigger"
 fi
@@ -82,18 +88,18 @@ fi
 # --- Switch Kodi to Arctic Fuse 2 (or Horizon 2) ---
 PREFERRED_SKIN="skin.arctic.fuse.2"   # alternative: skin.arctic.horizon.2
 if [[ -x "$KODI_SEND" ]]; then
-  if ! systemctl is-active --quiet mediacenter; then
-    log "[addons] Kodi not running — starting mediacenter to switch skin"
-    systemctl start mediacenter
+  if ! systemctl is-active --quiet xbmc; then
+    log "[addons] Kodi not running — starting xbmc to switch skin"
+    systemctl start xbmc
     sleep 15
   fi
   # Install + enable chosen skin (safe if already installed)
-  sudo -u osmc "$KODI_SEND" -a "InstallAddon(${PREFERRED_SKIN})" || true
-  sudo -u osmc "$KODI_SEND" -a "EnableAddon(${PREFERRED_SKIN})" || true
+  sudo -u xbian "$KODI_SEND" -a "InstallAddon(${PREFERRED_SKIN})" || true
+  sudo -u xbian "$KODI_SEND" -a "EnableAddon(${PREFERRED_SKIN})" || true
 
   # Ask Kodi to switch skin (user will see the 'Keep this skin?' prompt)
-  sudo -u osmc "$KODI_SEND" -a "SetProperty(lookandfeel.skin,${PREFERRED_SKIN},10025)" || true
-  sudo -u osmc "$KODI_SEND" -a "Notification(Skin,Switching to Arctic…,8000)" || true
+  sudo -u xbian "$KODI_SEND" -a "SetProperty(lookandfeel.skin,${PREFERRED_SKIN},10025)" || true
+  sudo -u xbian "$KODI_SEND" -a "Notification(Skin,Switching to Arctic…,8000)" || true
 else
   warn "[addons] kodi-send not found; skipping skin switch"
 fi
@@ -111,7 +117,7 @@ fi
 
 # --- Friendly heads-up for Artwork Dump usage ---
 if [[ -x "$KODI_SEND" ]]; then
-  sudo -u osmc "$KODI_SEND" -a "Notification(Artwork Dump,Installed — run from Add-ons to fetch artwork,9000)" || true
+  sudo -u xbian "$KODI_SEND" -a "Notification(Artwork Dump,Installed — run from Add-ons to fetch artwork,9000)" || true
 fi
 
 log "[addons] All done."

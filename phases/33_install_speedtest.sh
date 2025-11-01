@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/33_install_speedtest.sh
 # Install /usr/local/sbin/if-speedtest: fast interface-bound downlink tester
 # Safe to run repeatedly.

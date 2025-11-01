@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/43_fonts.sh
 # Install EXO2 (Regular/Light/Bold) + Font.xml into Arctic Fuse 2.
 # Idempotent, with safety checks and optional skin reload.
@@ -13,7 +16,7 @@ CANDIDATE_SKINS=(
   # "skin.arctic.horizon.2"   # uncomment if you want to support Horizon too
 )
 
-ASSETS_ROOT="/opt/osmc-oneclick/assets"
+ASSETS_ROOT="/opt/xbian-oneclick/assets"
 FONT_XML_SRC="${ASSETS_ROOT}/Font.xml"
 FONTS_SRC_DIR="${ASSETS_ROOT}/fonts"
 
@@ -27,7 +30,7 @@ NEEDED_TTFS=(
 find_skin_path() {
   local sid
   for sid in "${CANDIDATE_SKINS[@]}"; do
-    local p="/home/osmc/.kodi/addons/${sid}"
+    local p="/home/xbian/.kodi/addons/${sid}"
     if [[ -d "$p" ]]; then
       echo "$sid|$p"
       return 0
@@ -74,13 +77,13 @@ log "[fonts] Placing Font.xml to ${LAYOUT_DIR}/Font.xml"
 cp -f "$FONT_XML_SRC" "${LAYOUT_DIR}/Font.xml"
 
 # --- Permissions ---
-chown -R osmc:osmc "$SKIN_PATH" || true
+chown -R xbian:xbian "$SKIN_PATH" || true
 
 # --- Nudge Kodi to pick up the new fonts (non-fatal if kodi-send missing) ---
 if command -v kodi-send >/dev/null 2>&1; then
-  sudo -u osmc kodi-send -a "Notification(Fonts,EXO2 installed for ${SKIN_ID},6000)" || true
+  sudo -u xbian kodi-send -a "Notification(Fonts,EXO2 installed for ${SKIN_ID},6000)" || true
   # Reload skin so Font.xml is re-read
-  sudo -u osmc kodi-send -a "ReloadSkin()" || true
+  sudo -u xbian kodi-send -a "ReloadSkin()" || true
 fi
 
 log "[fonts] EXO2 fonts installed successfully for ${SKIN_ID}"

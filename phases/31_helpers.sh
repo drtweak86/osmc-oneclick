@@ -6,7 +6,7 @@ toast_vpn_simple() {
   # Args: COUNTRY_NAME PCT SPEED_MBPS
   local country="$1" pct="$2" speed="$3"
   command -v kodi-send >/dev/null 2>&1 || return 0
-  kodi-send --action="Notification(VPN,${country}  ${pct}%  ${speed} Mbps,6000)" >/dev/null 2>&1 || true
+  nofail kodi-send --action="Notification(VPN,${country}  ${pct}%  ${speed} Mbps,6000)" >/dev/null 2>&1 || true
 }
 
 # Country name from a WireGuard iface pattern like de-ber, nl-ams, uk-lon, us-nyc, etc.
@@ -60,5 +60,8 @@ toast_vpn_once() {
 # Nice Kodi popup
 kodi_dialog() {
   command -v kodi-send >/dev/null 2>&1 || return 0
-  kodi-send --action="Notification($1,$2,8000,/home/osmc/.kodi/media/notify/icons/info.png)" >/dev/null 2>&1 || true
+  nofail kodi-send --action="Notification($1,$2,8000,/home/xbian/.kodi/media/notify/icons/info.png)" >/dev/null 2>&1 || true
 }
+
+# nofail CMD... : run command if present, never fail
+nofail() { command -v "$1" >/dev/null 2>&1 || return 0; "$@"; }

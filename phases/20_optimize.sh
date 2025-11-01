@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/20_optimize.sh
 # System optimisations for streaming: rng, DNS cache, TCP tuning with BBR fallback.
 # Does NOT touch /boot or GPU/OC (handled by 05_pi_tune.sh).
@@ -20,7 +23,7 @@ else
 fi
 
 # -------- TCP/queue tuning ---------------------------------------------------
-SYSCTL_FILE="/etc/sysctl.d/99-osmc-oneclick.conf"
+SYSCTL_FILE="/etc/sysctl.d/99-xbian-oneclick.conf"
 
 # Try to enable BBR; if not available, fall back to 'cubic'
 TCP_CC="bbr"

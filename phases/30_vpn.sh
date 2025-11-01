@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
+set -euo pipefail
 
 log(){ echo -e "[oneclick][30_vpn] $*"; }
 warn(){ echo -e "[oneclick][WARN] $*" >&2; }
@@ -13,20 +16,20 @@ if ! apt-get install -y --no-install-recommends wireguard resolvconf ; then
   apt-get install -y --no-install-recommends wireguard openresolv
 fi
 
-# --- Pull your private VPN configs as 'osmc' (SSH key expected in ~osmc/.ssh) ---
-REPO_VPN="git@github.com:drtweak86/osmc-vpn-configs.git"
-DEST_VPN="/opt/osmc-vpn-configs"
+# --- Pull your private VPN configs as 'xbian' (SSH key expected in ~xbian/.ssh) ---
+REPO_VPN="git@github.com:drtweak86/xbian-vpn-configs.git"
+DEST_VPN="/opt/xbian-vpn-configs"
 
 mkdir -p "$(dirname "$DEST_VPN")"
-chown -R osmc:osmc "$(dirname "$DEST_VPN")"
+chown -R xbian:xbian "$(dirname "$DEST_VPN")"
 
 if [ -d "$DEST_VPN/.git" ]; then
   log "Updating VPN repo in $DEST_VPN"
-  sudo -u osmc -H git -C "$DEST_VPN" fetch --depth=1 origin main || warn "git fetch failed"
-  sudo -u osmc -H git -C "$DEST_VPN" reset --hard origin/main || warn "git reset failed"
+  sudo -u xbian -H git -C "$DEST_VPN" fetch --depth=1 origin main || warn "git fetch failed"
+  sudo -u xbian -H git -C "$DEST_VPN" reset --hard origin/main || warn "git reset failed"
 else
   log "Cloning VPN repo into $DEST_VPN"
-  sudo -u osmc -H git clone --depth=1 "$REPO_VPN" "$DEST_VPN" || warn "git clone failed (check SSH key & repo access)"
+  sudo -u xbian -H git clone --depth=1 "$REPO_VPN" "$DEST_VPN" || warn "git clone failed (check SSH key & repo access)"
 fi
 
 # --- Install WireGuard configs into /etc/wireguard ---

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/45_kodi_qol.sh
 # Kodi QoL tweaks for streaming on Pi/OSMC (Omega):
 # - Adjust refresh rate (on start/stop)
@@ -12,7 +15,7 @@ set -euo pipefail
 log(){ echo "[oneclick][45_kodi_qol] $*"; }
 warn(){ echo "[oneclick][WARN] $*">&2; }
 
-USER="osmc"
+USER="xbian"
 KODI_HOME="/home/${USER}/.kodi"
 USERDATA="${KODI_HOME}/userdata"
 AUTOEXEC="${USERDATA}/autoexec.py"
@@ -103,9 +106,9 @@ chown "${USER}:${USER}" "$AUTOEXEC"
 chmod 0644 "$AUTOEXEC"
 
 # Ensure Kodi is running so JSON-RPC applies now (otherwise it will apply next start)
-if ! systemctl is-active --quiet mediacenter; then
-  log "Starting mediacenter so QoL settings can apply…"
-  systemctl start mediacenter
+if ! systemctl is-active --quiet xbmc; then
+  log "Starting xbmc so QoL settings can apply…"
+  systemctl start xbmc
   sleep 10
 fi
 

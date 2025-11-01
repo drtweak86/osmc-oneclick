@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/41_backup.sh
 # Creates/updates systemd service+timer to run 40_backup.sh on a schedule.
 set -euo pipefail
 
 log(){ echo "[oneclick][41_backup] $*"; }
 
-WORKER="/opt/osmc-oneclick/phases/40_backup.sh"
+WORKER="/opt/xbian-oneclick/phases/40_backup.sh"
 [ -x "$WORKER" ] || { log "ERROR: $WORKER not found/executable"; exit 1; }
 
 # Service
@@ -41,7 +44,7 @@ systemctl enable --now oneclick-backup.timer
 
 # Friendly Kodi toast if available
 if command -v kodi-send >/dev/null 2>&1; then
-  kodi-send --action="Notification(Backups,Daily backup timer enabled,6000)" || true
+  nofail kodi-send --action="Notification(Backups,Daily backup timer enabled,6000)" || true
 fi
 
 log "Installed/started oneclick-backup.timer (runs $WORKER)"

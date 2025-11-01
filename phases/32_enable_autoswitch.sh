@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
+set -euo pipefail
 log(){ echo -e "[oneclick][32_enable_autoswitch] $*"; }
 
 SVC=/etc/systemd/system/wg-autoswitch.service
 TMR=/etc/systemd/system/wg-autoswitch.timer
-SRC_DIR="/opt/osmc-oneclick/systemd"
+SRC_DIR="/opt/xbian-oneclick/systemd"
 
 install_unit(){
   local src="$1" dst="$2"

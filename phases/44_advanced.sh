@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
+. /opt/osmc-oneclick/phases/31_helpers.sh || true
+. /opt/osmc-oneclick/phases/31_toast.sh || true
 # phases/44_advanced.sh
 # Install advancedsettings.xml from assets/config (no cache overrides for Kodi 21+).
 # - Idempotent (skips if unchanged)
@@ -10,12 +13,12 @@ set -euo pipefail
 # Helpers (log/warn/kodi_dialog)
 . "$(dirname "$0")/31_helpers.sh"
 
-USER="${USER:-osmc}"
+USER="${USER:-xbian}"
 KODI_HOME="/home/${USER}/.kodi"
 USERDATA="${KODI_HOME}/userdata"
 
 # Allow BASE_DIR override, otherwise default
-BASE_DIR="${BASE_DIR:-/opt/osmc-oneclick}"
+BASE_DIR="${BASE_DIR:-/opt/xbian-oneclick}"
 ASSET_AS="${BASE_DIR}/assets/config/advancedsettings.xml"
 DEST_AS="${USERDATA}/advancedsettings.xml"
 

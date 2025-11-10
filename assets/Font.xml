@@ -5,20 +5,20 @@
         <include>Font_Default_Inter</include>
     </fontset>
 
-    <fontset id="Default (Unicode)" unicode="true">
-        <include content="Font_Default_Inter">
-            <param name="font_bold">resource://resource.font.robotocjksc/Inter-Unicode-Bold.ttf</param>
-            <param name="font_regular">resource://resource.font.robotocjksc/Inter-Unicode-Regular.ttf</param>
-            <param name="font_light">resource://resource.font.robotocjksc/Inter-Unicode-Regular.ttf</param>
-            <param name="style_light">light</param>
+    <fontset id="Default" unicode="false">
+    <include content="Font_Default">
+        <param name="font_bold">Exo2-Bold.ttf</param>
+        <param name="font_regular">Exo2-Regular.ttf</param>
+        <param name="font_light">Exo2-Light.ttf</param>
 
-            <param name="plot_linespacing_head">1.03</param>
-            <param name="plot_linespacing_midi">1.485</param>
-            <param name="plot_linespacing_main">1.13</param>
-            <param name="plot_linespacing_mini">1.20</param>
-            <param name="plot_linespacing_tiny">1.11</param>
-        </include>
-    </fontset>
+        <!-- keep your Exo2 spacing so text doesn’t look cramped -->
+        <param name="plot_linespacing_head">1.00</param>
+        <param name="plot_linespacing_midi">1.356</param>
+        <param name="plot_linespacing_main">1.045</param>
+        <param name="plot_linespacing_mini">1.128</param>
+        <param name="plot_linespacing_tiny">1.025</param>
+    </include>
+</fontset>
     
     <fontset id="Condensed (Classic)" unicode="false">
         <include>Font_Default</include>
@@ -57,19 +57,6 @@
             <param name="font_bold">Outfit-Bold.ttf</param>
             <param name="font_regular">Outfit-Regular.ttf</param>
             <param name="font_light">Outfit-Light.ttf</param>
-            <param name="plot_linespacing_head">1.00</param>
-            <param name="plot_linespacing_midi">1.356</param>
-            <param name="plot_linespacing_main">1.045</param>
-            <param name="plot_linespacing_mini">1.128</param>
-            <param name="plot_linespacing_tiny">1.025</param>
-        </include>
-    </fontset>
-
-<fontset id="Exo2 (Experimental)" unicode="false">
-        <include content="Font_Default">
-            <param name="font_bold">Exo2-Bold.ttf</param>
-            <param name="font_regular">Exo2-Regular.ttf</param>
-            <param name="font_light">Exo2-Light.ttf</param>
             <param name="plot_linespacing_head">1.00</param>
             <param name="plot_linespacing_midi">1.356</param>
             <param name="plot_linespacing_main">1.045</param>
